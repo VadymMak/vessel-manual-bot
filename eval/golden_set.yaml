@@ -6,6 +6,29 @@
 # Формат:
 #   expected_contains: строки, которые ОБЯЗАНЫ присутствовать в ответе
 #   must_not_contain:  строки, которых в ответе быть НЕ ДОЛЖНО
+#
+#   Элемент expected_contains бывает двух видов:
+#
+#     - "205 kPa"              СТРОГО. Проверяется вхождение ровно этой строки.
+#                              Так задаётся всё непереводимое: числа с
+#                              единицами, номера деталей (1U-5490), коды
+#                              (ADEM III, SEBU7844-37), номера страниц.
+#                              Ослаблять это нельзя — здесь и живёт защита
+#                              от выдуманных значений.
+#
+#     - ["wiring", "проводк"]  ЛЮБОЙ ИЗ ВАРИАНТОВ. Так задаётся переводимое:
+#                              понятия, которые система по правилу 7 системного
+#                              промпта передаёт на языке вопроса. Вопросы у нас
+#                              русские, значит и ответ русский, и требовать
+#                              английское 'wiring' — проверять язык, а не
+#                              знание. Русские варианты даются основой слова
+#                              («проводк»), потому что сравнение идёт по
+#                              вхождению подстроки и падежи заранее не известны.
+#
+#   Граница проходит по смыслу, а не по удобству: если значение при переводе
+#   меняет форму — оно переводимое; если обязано остаться посимвольно тем же —
+#   строгое. Список альтернатив НЕ повод внести туда то, что система сейчас
+#   отвечает; он нужен только там, где верны оба варианта.
 #   expected_pages:    [start, end] — ссылка на страницы из документа
 #   category:
 #     number_accuracy  — точность числового значения с единицами
@@ -94,7 +117,7 @@
   question: "Что должно произойти с обоими затворами air shutoff при активации EMERGENCY STOP на ADEM III?"
   category: procedure_detail
   expected_contains:
-    - "close"
+    - ["close", "закр"]          # закроются / закрыться / закрыты
   expected_pages: [68, 70]
   notes: "Чанк 68, шаг 2: 'Both air shutoff gates should close'"
 
@@ -102,7 +125,7 @@
   question: "Какой первый шаг проверки air shutoff на ADEM III?"
   category: step_count
   expected_contains:
-    - "OPEN"
+    - ["OPEN", "открыт"]        # «в положении OPEN» / «в открытом положении»
   expected_pages: [68, 70]
   notes: "Чанк 68, шаг 1: 'Ensure that both air shutoff gates are latched in the OPEN position'"
 
@@ -110,7 +133,7 @@
   question: "Что проверить если air shutoff gate не остаётся в открытом положении на ADEM III?"
   category: procedure_detail
   expected_contains:
-    - "wiring"
+    - ["wiring", "проводк"]     # проводку / проводка / проводки
   expected_pages: [68, 70]
   notes: "Чанк 68, шаг 1: 'check the wiring for the air shutoffs'"
 
@@ -201,7 +224,7 @@
   question: "Как долго прогонять двигатель на высоких оборотах при заполнении cooling system?"
   category: procedure_detail
   expected_contains:
-    - "1 minute"
+    - ["1 minute", "1 минут"]   # 1 минуту / 1 минуты
   expected_pages: [79, 81]
   notes: "Чанк 86, шаг 2: 'Run the engine at high idle for 1 minute to purge the air'"
 
@@ -296,8 +319,8 @@
   question: "Нужно ли переводить двигатель на высокие обороты при заполнении охлаждающей системы?"
   category: procedure_detail
   expected_contains:
-    - "high idle"
-    - "1 minute"
+    - ["high idle", "высоких оборот", "высокие оборот"]
+    - ["1 minute", "1 минут"]
   expected_pages: [79, 81]
   notes: "Чанк 86, шаг 2: прогон на high idle 1 минуту для удаления воздуха из полостей блока"
 
@@ -305,6 +328,6 @@
   question: "Что происходит если не промыть систему охлаждения полностью после Cat DEAC cleaner?"
   category: procedure_detail
   expected_contains:
-    - "copper"
+    - ["copper", "медн", "меди"] # медные компоненты / повреждение меди
   expected_pages: [79, 81]
   notes: "Чанк 85, NOTICE: 'Improper or incomplete rinsing... can result in damage to copper and other metal components'"

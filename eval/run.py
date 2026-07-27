@@ -44,12 +44,33 @@ class EvalResult:
     error: str = ""
 
 
+def _satisfied(expectation, answer_lower: str) -> bool:
+    """
+    Одно ожидание выполнено?
+
+    Строка   — строгая проверка вхождения (числа, номера деталей, коды).
+    Список   — «любой из вариантов»: одно и то же понятие по-русски и
+               по-английски. Система отвечает на языке вопроса (правило 7
+               системного промпта), поэтому требовать именно английское
+               'wiring' от русского ответа — дефект теста, а не системы.
+    """
+    if isinstance(expectation, (list, tuple)):
+        return any(str(v).lower() in answer_lower for v in expectation)
+    return str(expectation).lower() in answer_lower
+
+
+def _fmt_expectation(expectation) -> str:
+    if isinstance(expectation, (list, tuple)):
+        return " | ".join(str(v) for v in expectation) + "  (любой из вариантов)"
+    return str(expectation)
+
+
 def _check(answer: str, item: dict) -> EvalResult:
     answer_lower = answer.lower()
 
     missing = [
-        exp for exp in item.get("expected_contains", [])
-        if str(exp).lower() not in answer_lower
+        _fmt_expectation(exp) for exp in item.get("expected_contains", [])
+        if not _satisfied(exp, answer_lower)
     ]
     forbidden = [
         s for s in item.get("must_not_contain", [])
