@@ -101,10 +101,15 @@ async def _run_one(item: dict, use_rerank: bool) -> EvalResult:
     from rag.generator import generate
     from rag.config import settings
 
+    from rag.scorelog import log_query
+
     try:
         candidates = await retrieve(item["question"])
+        scores: list[float] = []
         if use_rerank and candidates:
-            top = Reranker().rerank(item["question"], candidates, top_n=settings.rerank_top_n)
+            top, scores = Reranker().rerank_with_scores(
+                item["question"], candidates, top_n=settings.rerank_top_n
+            )
         else:
             top = candidates[:settings.rerank_top_n]
 
@@ -112,6 +117,10 @@ async def _run_one(item: dict, use_rerank: bool) -> EvalResult:
         async for token in generate(item["question"], top):
             parts.append(token)
         answer = "".join(parts)
+
+        # source="eval" — чтобы при калибровке порога прогоны golden set
+        # можно было отделить от живых запросов механиков.
+        log_query(item["question"], top, scores, answer, source="eval")
 
     except Exception as exc:
         return EvalResult(

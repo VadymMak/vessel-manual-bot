@@ -65,8 +65,22 @@ class Reranker:
 
         Возвращает top_n чанков в порядке убывания score.
         """
+        return self.rerank_with_scores(query, chunks, top_n)[0]
+
+    def rerank_with_scores(
+        self,
+        query: str,
+        chunks: list[RetrievedChunk],
+        top_n: int,
+    ) -> tuple[list[RetrievedChunk], list[float]]:
+        """
+        То же, что rerank, но отдаёт и сырые логиты — для rag/scorelog.py.
+
+        Отдельный метод, а не изменение сигнатуры rerank: у rerank есть
+        вызывающие, которым скоры не нужны, и ломать их незачем.
+        """
         if not chunks:
-            return []
+            return [], []
         self._load()
 
         pairs = [[query, c.content] for c in chunks]
@@ -88,6 +102,7 @@ class Reranker:
 
         ranked = sorted(zip(scores, chunks), key=lambda x: -x[0])
         result = [chunk for _, chunk in ranked[:top_n]]
+        top_scores = [score for score, _ in ranked[:top_n]]
 
         for i, (score, chunk) in enumerate(ranked[:top_n]):
             log.debug(
@@ -95,4 +110,4 @@ class Reranker:
                 i + 1, score, chunk.heading, chunk.page_start, chunk.page_end,
             )
 
-        return result
+        return result, top_scores

@@ -36,5 +36,8 @@ class Settings(BaseSettings):
     prefix_cache_path: str = ".prefix_cache.json"
     chunks_path: str = "chunks.json"
 
+    # Скор-лог реранкера (rag/scorelog.py). Только сбор, отсечки по нему нет.
+    score_log_path: str = "score_log.jsonl"
+
 
 settings = Settings()

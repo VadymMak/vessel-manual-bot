@@ -90,7 +90,9 @@ async def _cmd_query(
 
     # ── Reranking ──────────────────────────────────────────────────────────────
     _h("Reranking")
-    top_chunks = Reranker().rerank(question, candidates, top_n=rerank_n)
+    top_chunks, top_scores = Reranker().rerank_with_scores(
+        question, candidates, top_n=rerank_n
+    )
     click.secho(f"Топ {len(top_chunks)} после реранкинга:", fg="cyan", err=True)
     for i, c in enumerate(top_chunks):
         click.echo(f"  [{i+1}] {c.heading}  ({c.citation})", err=True)
@@ -109,6 +111,11 @@ async def _cmd_query(
         print()  # перевод строки после стриминга
 
     full_answer = "".join(answer_parts)
+
+    # ── Скор-лог ───────────────────────────────────────────────────────────────
+    # Только сбор данных для будущей калибровки порога отказа. Отсечки нет.
+    from .scorelog import log_query
+    log_query(question, top_chunks, top_scores, full_answer, source="cli")
 
     # ── Grounding check ────────────────────────────────────────────────────────
     _h("Grounding check")
