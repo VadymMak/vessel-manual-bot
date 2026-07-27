@@ -1,0 +1,10 @@
+# Этап 1: ingestion
+PyMuPDF>=1.24
+# Этап 2+ (пока не используются)
+# psycopg[binary]>=3.1
+# pgvector>=0.2.5
+# FlagEmbedding>=1.2      # bge-m3 + bge-reranker-v2-m3
+# onnxruntime>=1.17       # int8-инференс на CPU
+# openai>=1.0
+# fastapi
+# uvicorn[standard]
