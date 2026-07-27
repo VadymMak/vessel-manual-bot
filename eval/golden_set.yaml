@@ -1,0 +1,310 @@
+# eval/golden_set.yaml
+#
+# Golden set — 32 вопроса из реального содержимого chunks.json (SEBU7844-37).
+# Каждый ответ верифицирован прямым чтением чанков.
+#
+# Формат:
+#   expected_contains: строки, которые ОБЯЗАНЫ присутствовать в ответе
+#   must_not_contain:  строки, которых в ответе быть НЕ ДОЛЖНО
+#   expected_pages:    [start, end] — ссылка на страницы из документа
+#   category:
+#     number_accuracy  — точность числового значения с единицами
+#     part_number      — номер детали
+#     correct_variant  — правильный вариант процедуры (ADEM II vs III, ELC vs DEAC)
+#     honest_refusal   — информации нет в O&M, должен отказать
+#     step_count       — корректное число или порядок шагов
+#     procedure_detail — конкретная деталь процедуры
+
+# ─── 1. Aftercooler Core ─────────────────────────────────────────────────────
+
+- id: gs001
+  question: "Какое максимальное давление воздуха при очистке сердцевины aftercooler?"
+  category: number_accuracy
+  expected_contains:
+    - "205 kPa"
+    - "30 psi"
+  expected_pages: [68, 68]
+  notes: "WARNING block в чанке 66: 'Maximum air pressure at the nozzle must be less than 205 kPa (30 psi)'"
+
+- id: gs002
+  question: "Какой номер детали у Hydrosolv 4165?"
+  category: part_number
+  expected_contains:
+    - "1U-5490"
+  expected_pages: [68, 68]
+  notes: "Table 38 в чанке 66: 1U-5490 Hydrosolv 4165 19 L (5 US gal)"
+
+- id: gs003
+  question: "Какой номер детали у Hydrosolv 100?"
+  category: part_number
+  expected_contains:
+    - "174-6854"
+  expected_pages: [68, 68]
+  notes: "Table 38 в чанке 66: 174-6854 Hydrosolv 100 19 L (5 US gal)"
+
+- id: gs004
+  question: "Какова максимальная температура воды при использовании очистителя Hydrosolv для aftercooler?"
+  category: number_accuracy
+  expected_contains:
+    - "93"
+    - "200"
+  expected_pages: [68, 68]
+  notes: "Чанк 66: 'Use a 2 to 5 percent concentration of the cleaner at temperatures up to 93°C (200°F)'"
+
+- id: gs005
+  question: "Какую концентрацию очистителя Hydrosolv использовать для промывки aftercooler?"
+  category: procedure_detail
+  expected_contains:
+    - "2"
+    - "5"
+  expected_pages: [68, 68]
+  notes: "Чанк 66: '2 to 5 percent concentration'"
+
+- id: gs006
+  question: "Какой размер упаковки Hydrosolv 4165 (1U-5490)?"
+  category: procedure_detail
+  expected_contains:
+    - "19 L"
+    - "5 US gal"
+  expected_pages: [68, 68]
+  notes: "Чанк 66: таблица Hydrosolv cleaners"
+
+# ─── 2. Air Shutoff — вариантный тест ────────────────────────────────────────
+
+- id: gs007
+  question: "Как проверить air shutoff на двигателе с ADEM III?"
+  category: correct_variant
+  expected_contains:
+    - "ADEM III"
+  must_not_contain:
+    - "5 steps"       # это ADEM II — недопустимо вернуть не тот вариант
+  expected_pages: [68, 70]
+  notes: "Чанк 68: 8 шагов для ADEM III, страницы 68-70. НЕ ДОЛЖНО вернуть вариант ADEM II (5 шагов)."
+
+- id: gs008
+  question: "Как проверить air shutoff на двигателе с ADEM II?"
+  category: correct_variant
+  expected_contains:
+    - "ADEM II"
+  must_not_contain: []
+  expected_pages: [68, 69]
+  notes: "Чанк 67: 5 шагов для ADEM II, страницы 68-69."
+
+- id: gs009
+  question: "Что должно произойти с обоими затворами air shutoff при активации EMERGENCY STOP на ADEM III?"
+  category: procedure_detail
+  expected_contains:
+    - "close"
+  expected_pages: [68, 70]
+  notes: "Чанк 68, шаг 2: 'Both air shutoff gates should close'"
+
+- id: gs010
+  question: "Какой первый шаг проверки air shutoff на ADEM III?"
+  category: step_count
+  expected_contains:
+    - "OPEN"
+  expected_pages: [68, 70]
+  notes: "Чанк 68, шаг 1: 'Ensure that both air shutoff gates are latched in the OPEN position'"
+
+- id: gs011
+  question: "Что проверить если air shutoff gate не остаётся в открытом положении на ADEM III?"
+  category: procedure_detail
+  expected_contains:
+    - "wiring"
+  expected_pages: [68, 70]
+  notes: "Чанк 68, шаг 1: 'check the wiring for the air shutoffs'"
+
+# ─── 3. Coolant - Change: ELC vs DEAC ────────────────────────────────────────
+
+- id: gs012
+  question: "С какого шага начинается промывка cooling system, если она заполнена Cat DEAC?"
+  category: correct_variant
+  expected_contains:
+    - "3"
+  must_not_contain: []
+  expected_pages: [79, 81]
+  notes: "Чанк 85: процедура DEAC начинается с шага 3 (Caterpillar так нумерует, не с 1). Это ключевой инвариант — нельзя путать с ELC."
+
+- id: gs013
+  question: "Сколько минут минимум нужно прогонять двигатель при промывке coolant с Cat DEAC cleaner?"
+  category: number_accuracy
+  expected_contains:
+    - "30"
+  expected_pages: [79, 81]
+  notes: "Чанк 85, шаг 8: 'run the engine at low idle for a minimum of 30 minutes'"
+
+- id: gs014
+  question: "Какова минимальная температура охлаждающей жидкости при промывке Cat DEAC?"
+  category: number_accuracy
+  expected_contains:
+    - "82"
+    - "180"
+  expected_pages: [79, 81]
+  notes: "Чанк 85, шаг 8: 'coolant temperature should be at least 82 °C (180 °F)'"
+
+- id: gs015
+  question: "Сколько очистителя добавлять при промывке Cat DEAC на стандартную систему охлаждения?"
+  category: number_accuracy
+  expected_contains:
+    - "0.5 L"
+    - "15 L"
+  expected_pages: [79, 81]
+  notes: "Чанк 85, шаг 6: '0.5 L (1 pint) of cleaner per 15 L (4 US gal)'"
+
+- id: gs016
+  question: "Какой лимит скорости заполнения cooling system при замене coolant Cat DEAC?"
+  category: number_accuracy
+  expected_contains:
+    - "19 L"
+    - "5 US gal"
+  expected_pages: [79, 81]
+  notes: "Чанк 85, NOTICE: 'Fill the cooling system no faster than 19 L (5 US gal) per minute'"
+
+- id: gs017
+  question: "До какой температуры прогревать двигатель при промывке системы охлаждения Cat ELC?"
+  category: number_accuracy
+  expected_contains:
+    - "49"
+    - "66"
+  expected_pages: [79, 80]
+  notes: "Чанк 84, шаг 4: 'until the temperature reaches 49 to 66 °C (120 to 150 °F)'"
+
+- id: gs018
+  question: "Как долго прогонять двигатель при промывке Cat DEAC с тяжёлыми отложениями?"
+  category: number_accuracy
+  expected_contains:
+    - "90"
+  expected_pages: [79, 81]
+  notes: "Чанк 85, шаг 8: 'For cooling systems with heavy deposits or plugging, run the engine for 90 minutes'"
+
+- id: gs019
+  question: "Концентрация Cat DEAC cleaner при тяжёлых отложениях в cooling system?"
+  category: number_accuracy
+  expected_contains:
+    - "0.5 L"
+    - "3.8"
+  expected_pages: [79, 81]
+  notes: "Чанк 85, шаг 6: '0.5 L (1 pint) of cleaner per 3.8 to 7.6 L (1 to 2 US gal)'"
+
+# ─── 4. Fill Cooling System ───────────────────────────────────────────────────
+
+- id: gs020
+  question: "На каком уровне должна быть охлаждающая жидкость после заполнения cooling system?"
+  category: number_accuracy
+  expected_contains:
+    - "13 mm"
+    - "0.5 inch"
+  expected_pages: [79, 81]
+  notes: "Чанк 86, шаг 3: 'within 13 mm (0.5 inch) below the bottom of the pipe for filling'"
+
+- id: gs021
+  question: "Как долго прогонять двигатель на высоких оборотах при заполнении cooling system?"
+  category: procedure_detail
+  expected_contains:
+    - "1 minute"
+  expected_pages: [79, 81]
+  notes: "Чанк 86, шаг 2: 'Run the engine at high idle for 1 minute to purge the air'"
+
+# ─── 5. Battery ──────────────────────────────────────────────────────────────
+
+- id: gs022
+  question: "Какие инструменты нужны для проверки уровня электролита батареи?"
+  category: part_number
+  expected_contains:
+    - "1U-9921"
+  expected_pages: [75, 76]
+  notes: "Чанк 77: parts 1U-9921, 245-5829"
+
+# ─── 6. Centrifugal Oil Filter ────────────────────────────────────────────────
+
+- id: gs023
+  question: "Какой инструмент нужен для снятия centrifugal oil filter?"
+  category: part_number
+  expected_contains:
+    - "185-3630"
+  expected_pages: [77, 79]
+  notes: "Чанк 81, Table 39: Tool A = 185-3630 Strap Wrench Assembly"
+
+- id: gs024
+  question: "Какой Dial Indicator нужен при инспекции centrifugal oil filter?"
+  category: part_number
+  expected_contains:
+    - "8T-5096"
+  expected_pages: [77, 79]
+  notes: "Чанк 81, Table 39: Tool C = 8T-5096 Dial Indicator Group"
+
+- id: gs025
+  question: "Какой Puller Group используется при работе с centrifugal oil filter?"
+  category: part_number
+  expected_contains:
+    - "8T-0890"
+  expected_pages: [77, 79]
+  notes: "Чанк 81, Table 39: Tool B = 8T-0890 Puller Group"
+
+# ─── 7. Fuel System ──────────────────────────────────────────────────────────
+
+- id: gs026
+  question: "При каком давлении нужно менять fuel secondary filter?"
+  category: number_accuracy
+  expected_contains:
+    - "103 kPa"
+    - "15 psi"
+  expected_pages: [106, 107]
+  notes: "Чанк 119: back pressure 103 kPa (15 psi) — порог замены"
+
+# ─── 8. Честный отказ — критически важные случаи ─────────────────────────────
+
+- id: gs027
+  question: "Какой момент затяжки форсунки (fuel injector) на 3516B?"
+  category: honest_refusal
+  expected_contains:
+    - "Service Manual"
+  must_not_contain: []
+  expected_pages: []
+  notes: "Чанк 115: момент затяжки не в O&M. 'Adjust the lash for the fuel injector according to the Systems Operation/Testing And Adjusting'. Модель ОБЯЗАНА отказать."
+
+- id: gs028
+  question: "Каков зазор клапана (valve lash) на 3512C?"
+  category: honest_refusal
+  expected_contains:
+    - "Service Manual"
+  must_not_contain: []
+  expected_pages: []
+  notes: "Чанк 113: зазор клапана не в O&M. 'For the valve lash setting, see the engine Specifications manual.' Модель ОБЯЗАНА отказать."
+
+- id: gs029
+  question: "Как отрегулировать valve bridge на 3508B?"
+  category: honest_refusal
+  expected_contains:
+    - "Service Manual"
+  must_not_contain: []
+  expected_pages: []
+  notes: "Чанк 113: 'Refer to the Systems Operation/Testing and Adjusting Manual, Valve Lash and Valve Bridge Adjustment article'. Нет конкретных значений в O&M."
+
+- id: gs030
+  question: "Какое давление открытия форсунки на 3516C?"
+  category: honest_refusal
+  expected_contains:
+    - "не содержится"
+  must_not_contain: []
+  expected_pages: []
+  notes: "Этой информации нет ни в одном чанке. Абсолютный отказ."
+
+# ─── 9. Смешанные / интеграционные ───────────────────────────────────────────
+
+- id: gs031
+  question: "Нужно ли переводить двигатель на высокие обороты при заполнении охлаждающей системы?"
+  category: procedure_detail
+  expected_contains:
+    - "high idle"
+    - "1 minute"
+  expected_pages: [79, 81]
+  notes: "Чанк 86, шаг 2: прогон на high idle 1 минуту для удаления воздуха из полостей блока"
+
+- id: gs032
+  question: "Что происходит если не промыть систему охлаждения полностью после Cat DEAC cleaner?"
+  category: procedure_detail
+  expected_contains:
+    - "copper"
+  expected_pages: [79, 81]
+  notes: "Чанк 85, NOTICE: 'Improper or incomplete rinsing... can result in damage to copper and other metal components'"

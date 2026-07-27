@@ -8,3 +8,4 @@ chunks.json
 .DS_Store
 *.zip
 docs/*.pdf
+.prefix_cache.json

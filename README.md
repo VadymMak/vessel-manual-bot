@@ -3,12 +3,41 @@
 Извлечение и чанкинг PDF технической документации Caterpillar.
 Проверено на SEBU7844-37 (3500B/3500C Marine Engines, 152 стр.) → **164 чанка**.
 
+## Окружение
+
+**Python:** 3.11 (Homebrew). Используем `.venv` в корне проекта.
+
+```bash
+/usr/local/opt/python@3.11/bin/python3.11 -m venv .venv
+./.venv/bin/python -m pip install -r requirements.txt
+```
+
+Активировать для ручной работы: `source .venv/bin/activate`. В Makefile `.venv/bin/python` подхватывается автоматически (первый кандидат).
+
+**Почему такие пины в `requirements.txt`:**
+
+| Пин | Причина |
+|---|---|
+| `torch>=2.2` (frozen at 2.2.2) | 2.2.2 — последняя версия с колёсами под macOS x86_64. Сборки под Intel-Mac прекращены в январе 2024. Обновление невозможно. |
+| `numpy<2` | torch 2.2.2 собран против NumPy 1.x C API. NumPy 2.x убрал `_ARRAY_API` → `torch` падает при импорте. |
+| `transformers>=4.40,<5` | transformers 5.x требует `torch >= 2.4`. На Intel-Mac torch заморожен на 2.2 → FlagEmbedding 1.4.0 не импортируется. |
+
+**На Linux-сервере (Ubuntu, x86_64):** torch 2.4+ доступен, numpy 2.x совместим, пины `numpy<2` и `transformers<5` не нужны. Оставляем общие для минимизации расхождений между платформами.
+
 ## Быстрый старт
 
 ```bash
-pip install -r requirements.txt
-python3 -m ingestion.cli manual.pdf --out chunks.json
-python3 verify_chunks.py          # прогон инвариантов
+# Первый раз
+/usr/local/opt/python@3.11/bin/python3.11 -m venv .venv
+./.venv/bin/python -m pip install -r requirements.txt
+
+# Проверить окружение
+make check-py
+make check-env      # требует заполненного .env
+
+# Ingestion
+make ingest F=docs/SEBU7844-37.pdf
+make verify         # 5 инвариантов чанкинга
 ```
 
 ## Что делает
