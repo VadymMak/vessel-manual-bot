@@ -2,7 +2,16 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
+    # extra="forbid" ЗАДАН ЯВНО И НАМЕРЕННО, это не значение по умолчанию.
+    # Опечатка в имени переменной (классика: DATABASE_URL вместо DB_DSN) при
+    # ignore проглатывается молча, pydantic берёт дефолт localhost:5432, и вы
+    # ищете проблему в сети вместо .env. Один такой случай уже стоил часа.
+    # Следствие: в .env не должно быть ничего, кроме полей этого класса.
+    # Переменные окружения ОС (OMP_NUM_THREADS, MKL_NUM_THREADS) живут
+    # в Makefile, а не здесь.
+    model_config = SettingsConfigDict(
+        env_file=".env", env_file_encoding="utf-8", extra="forbid"
+    )
 
     # PostgreSQL
     db_dsn: str = "postgresql://vessel:vessel@localhost:5432/vessel"

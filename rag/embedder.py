@@ -88,6 +88,23 @@ class Embedder:
             from .config import settings
             from FlagEmbedding import BGEM3FlagModel
 
+            # Ограничение числа потоков. На сервере рядом крутится боевой
+            # торговый бот (systemd: trading-bot, mexc-*), и индексация,
+            # забравшая все 16 потоков, отбирает у него CPU.
+            # OMP_NUM_THREADS из .env одного не хватает: переменная действует
+            # только если выставлена ДО инициализации OpenMP-рантайма, а торч
+            # к этому моменту уже импортирован (numpy/torch тянутся сверху).
+            # torch.set_num_threads() работает в рантайме и потому надёжнее.
+            # Настройка глобальна для процесса — реранкер (rag/reranker.py)
+            # наследует её, если эмбеддер загрузился первым.
+            import os
+            import torch
+
+            n_threads = int(os.environ.get("OMP_NUM_THREADS", "0") or 0)
+            if n_threads > 0:
+                torch.set_num_threads(n_threads)
+                log.info("torch: ограничил интра-оп потоки до %d", n_threads)
+
             log.info("Загружаю bge-m3 на CPU (~30 с при первом запуске)…")
             try:
                 # FlagEmbedding ≥ 1.3: поддерживает параметр devices

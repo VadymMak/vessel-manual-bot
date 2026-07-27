@@ -38,6 +38,21 @@ endif
 # Python и shell читают один и тот же файл одинаково.
 LOAD_ENV = set -a; . ./.env; set +a;
 
+# Ограничение потоков BLAS/OpenMP. Это переменные окружения ОС, а не конфиг
+# приложения, поэтому им место здесь, а не в .env: rag/config.py работает
+# с extra="forbid", и лишний ключ в .env уронит загрузку настроек.
+# Ровно 8: по замерам на этой машине 8 потоков быстрее и 6 (2.29 против
+# 2.46 с/чанк), и 16 (2.60 — SMT только мешает). Второй половины машины
+# торговому боту (systemd: trading-bot, mexc-*) хватает с запасом.
+# rag/embedder.py читает OMP_NUM_THREADS из окружения процесса и дублирует
+# ограничение через torch.set_num_threads().
+#
+# ПОРЯДОК ЦЕЛЕЙ В СТРОКЕ ЗНАЧИМ: `load` первым словом строки GNU make 4.x
+# разбирает как директиву load (загрузка динамического объекта) и падает с
+# «load: cannot open shared object file». Поэтому load стоит не первым.
+query load eval: export OMP_NUM_THREADS=8
+query load eval: export MKL_NUM_THREADS=8
+
 .PHONY: check-py install ingest verify migrate load query eval psql dev clean check-env
 
 # ─── Этап 1: ingestion ───────────────────────────────────────────────────────
