@@ -9,3 +9,10 @@ chunks.json
 *.zip
 docs/*.pdf
 .prefix_cache.json
+
+# Артефакты прогонов: воспроизводятся make eval / python -m rag.trace,
+# в истории от них только шум и конфликты.
+eval_*.txt
+trace_*.txt
+rerank_scores.csv
+score_log.jsonl
