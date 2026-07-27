@@ -169,6 +169,71 @@ def _table_regions(page: fitz.Page) -> list[fitz.Rect]:
     return [r for r in regions if r.height > 20 and r.width > 60]
 
 
+def _grid_lines(page: fitz.Page, region: fitz.Rect) -> tuple[list[fitz.Rect], list[float]]:
+    """Вернуть вертикальные линии сетки и границы строк внутри области таблицы."""
+    verticals: list[fitz.Rect] = []
+    horizontals: list[float] = []
+    # Расширяем область поиска: внешние линии рамки лежат ровно на границе
+    # региона, а Rect.intersects() для соприкасающихся краёв даёт False.
+    probe = fitz.Rect(region.x0 - 3, region.y0 - 3, region.x1 + 3, region.y1 + 3)
+    for d in page.get_drawings():
+        if d.get("type") != "f":
+            continue
+        r = d["rect"]
+        if not probe.intersects(r):
+            continue
+        if r.width < 3 and r.height > 4:
+            verticals.append(fitz.Rect(r))
+        elif r.height < 3 and r.width > 20:
+            horizontals.append(round(r.y0, 1))
+    return verticals, sorted(set(horizontals))
+
+
+def extract_table_rows(page: fitz.Page, region: fitz.Rect) -> list[list[str]]:
+    """Разобрать таблицу на ячейки по нарисованной сетке.
+
+    Зачем это нужно, а не просто взять текст строкой:
+    строка «1U-5490 Hydrosolv 4165 19 L (5 US gal)» без разделителей колонок
+    неоднозначна. На вопрос «какой номер детали у Hydrosolv 4165» модель видит
+    сплошной поток, где 4165 может быть и частью названия, и номером. На
+    SEBU7844-37 это давало стабильные провалы именно по номерам деталей
+    при том, что нужный чанк находился корректно.
+
+    Вертикальные линии определяются ДЛЯ КАЖДОЙ СТРОКИ отдельно: в шапке
+    таблицы ячейка обычно объединена на всю ширину, и общий набор границ
+    разрезал бы заголовок посередине слова.
+    """
+    verticals, h_lines = _grid_lines(page, region)
+    if len(h_lines) < 2:
+        return []
+
+    rows: list[list[str]] = []
+    for top, bottom in zip(h_lines, h_lines[1:]):
+        if bottom - top < 6:  # сдвоенная линия, не строка
+            continue
+        mid = (top + bottom) / 2
+        # Границы колонок ИМЕННО ЭТОЙ строки: внутренние берём из вертикальных
+        # линий, пересекающих строку, внешние — всегда края региона.
+        inner = {
+            round(v.x0, 1) for v in verticals
+            if v.y0 - 2 <= mid <= v.y1 + 2
+            and region.x0 + 2 < v.x0 < region.x1 - 2
+        }
+        xs = sorted({round(region.x0, 1), *inner, round(region.x1, 1)})
+
+        cells: list[str] = []
+        for left, right in zip(xs, xs[1:]):
+            clip = fitz.Rect(left + 1, top + 1, right - 1, bottom - 1)
+            text = page.get_text("text", clip=clip).strip()
+            text = re.sub(r"\s+", " ", text)
+            cells.append(text)
+
+        if any(cells):
+            rows.append(cells)
+
+    return rows
+
+
 def _strip_icode(text: str) -> tuple[str, str | None]:
     """Отделить ID модуля Caterpillar от заголовка, если они в одном блоке."""
     m = re.match(r"^(i\d{8})\s+(.*)$", text, flags=re.S)
@@ -246,6 +311,7 @@ def extract_page(page: fitz.Page, page_no: int) -> list[Element]:
         by_column[col].sort(key=lambda b: b["bbox"][1])
 
     elements: list[Element] = []
+    emitted_tables: set[int] = set()
     for col in ("full", "left", "right"):
         col_blocks = by_column[col]
         # Пометить блоки, идущие сразу под баннером WARNING
@@ -270,15 +336,31 @@ def extract_page(page: fitz.Page, page_no: int) -> list[Element]:
             kind = _classify(b, text)
             meta: dict = {}
 
-            # Текст внутри нарисованной сетки — строка таблицы, а не абзац
+            # Текст внутри нарисованной сетки принадлежит таблице.
+            # Таблицу разбираем ЦЕЛИКОМ по ячейкам при первом попавшемся
+            # внутреннем блоке, остальные блоки этой области пропускаем:
+            # плоская строка «1U-5490 Hydrosolv 4165 19 L» без границ колонок
+            # неоднозначна и стабильно ломает вопросы про номера деталей.
             block_rect = fitz.Rect(b["bbox"])
             if kind in ("para", "step"):
-                for region in table_regions:
+                inside = None
+                for idx, region in enumerate(table_regions):
                     if region.intersects(block_rect) and block_rect.get_area():
                         overlap = (region & block_rect).get_area() / block_rect.get_area()
                         if overlap > 0.6:
-                            kind = "table_row"
+                            inside = idx
                             break
+                if inside is not None:
+                    if inside in emitted_tables:
+                        continue
+                    emitted_tables.add(inside)
+                    rows = extract_table_rows(page, table_regions[inside])
+                    if rows:
+                        elements.append(
+                            Element("table", "", page_no, col, y_top, {"rows": rows})
+                        )
+                        continue
+                    kind = "table_row"  # сетка не разобралась — старое поведение
 
             if kind in ("h1", "h2", "h3"):
                 text, icode = _strip_icode(text)

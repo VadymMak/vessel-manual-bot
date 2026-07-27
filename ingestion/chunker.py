@@ -98,6 +98,34 @@ def group_by_procedure(elements: list[Element]) -> list[list[Element]]:
 
 # ─── Рендеринг текста чанка ──────────────────────────────────────────────────
 
+def _render_table(rows: list[list[str]]) -> str:
+    """Отрисовать таблицу как Markdown с явными границами колонок.
+
+    Плоская строка «1U-5490 Hydrosolv 4165 19 L (5 US gal)» неоднозначна:
+    на вопрос «номер детали у Hydrosolv 4165» модель не может отличить номер
+    от названия и от объёма. С разделителями и шапкой связь «столбец → значение»
+    становится явной. На SEBU7844-37 без этого стабильно проваливались все вопросы
+    по номерам деталей при корректно найденном чанке.
+
+    Строки, объединённые на всю ширину (заголовок таблицы), выводим как подпись.
+    """
+    width = max(len(r) for r in rows)
+    out: list[str] = []
+    header_done = False
+
+    for row in rows:
+        if len(row) == 1 and width > 1:
+            out.append(row[0])          # объединённая ячейка — название таблицы
+            continue
+        cells = list(row) + [""] * (width - len(row))
+        out.append("| " + " | ".join(cells) + " |")
+        if not header_done:
+            out.append("|" + "|".join([" --- "] * width) + "|")
+            header_done = True
+
+    return "\n".join(out)
+
+
 def _render(elements: list[Element]) -> str:
     """Собрать текст чанка, сохранив порядок чтения и разметив структуру."""
     lines: list[str] = []
@@ -122,7 +150,11 @@ def _render(elements: list[Element]) -> str:
             body = el.text[len("NOTICE"):].strip()
             lines.append(f"NOTICE: {body}")
         elif el.kind == "table":
-            lines.append(f"[{el.text}]")
+            rows = el.meta.get("rows")
+            if rows:
+                lines.append(_render_table(rows))
+            elif el.text:
+                lines.append(f"[{el.text}]")   # подпись «Table 38»
             in_table = True
         elif el.kind == "table_row":
             lines.append(f"  | {el.text}")
@@ -147,8 +179,18 @@ def _collect_meta(elements: list[Element], chunk: Chunk) -> None:
             smcs.extend(el.meta.get("codes", []))
         if el.kind == "illustration" and "graphic_id" in el.meta:
             graphics.append(el.meta["graphic_id"])
-        parts.update(RE_PART_NUMBER.findall(el.text))
-        models.update(RE_MODELS.findall(el.text))
+
+        # Таблица хранит содержимое в meta["rows"], а не в .text — сканируем и его.
+        # Иначе номера деталей из таблиц не попадут в part_numbers, а это поле
+        # проиндексировано в GIN и используется для фильтрации по номеру.
+        searchable = el.text
+        if el.kind == "table" and el.meta.get("rows"):
+            searchable += " " + " ".join(
+                cell for row in el.meta["rows"] for cell in row
+            )
+
+        parts.update(RE_PART_NUMBER.findall(searchable))
+        models.update(RE_MODELS.findall(searchable))
 
     # Модуль управления берём из подзаголовка H2 сегмента, а не из первого
     # попавшегося упоминания: заголовок процедуры может перечислять оба

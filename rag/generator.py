@@ -135,7 +135,7 @@ async def generate(
 
     log.info("Генерирую ответ (lang=%s, фрагментов=%d)…", lang, len(chunks))
 
-    async with client.chat.completions.create(
+    stream = await client.chat.completions.create(
         model=settings.openai_model,
         messages=[
             {"role": "system", "content": system},
@@ -144,8 +144,8 @@ async def generate(
         stream=True,
         temperature=0.0,
         max_tokens=2000,
-    ) as stream:
-        async for event in stream:
-            delta = event.choices[0].delta.content
-            if delta:
-                yield delta
+    )
+    async for event in stream:
+        delta = event.choices[0].delta.content
+        if delta:
+            yield delta
