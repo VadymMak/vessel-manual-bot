@@ -16,3 +16,7 @@ eval_*.txt
 trace_*.txt
 rerank_scores.csv
 score_log.jsonl
+
+# Выгруженные ONNX-модели реранкера: 2.8 ГБ, воспроизводятся
+# scripts/export_reranker_onnx.sh. В git им делать нечего.
+models/
