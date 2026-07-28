@@ -77,7 +77,8 @@ SELECT
     c.smcs_codes, c.part_numbers, c.applicable_models,
     c.control_module, c.step_count, c.part_index, c.part_total,
     c.safety_blocks, c.has_warning,
-    d.applicable_models AS doc_models
+    d.applicable_models AS doc_models,
+    d.filename AS doc_filename
 FROM chunks c
 JOIN documents d ON d.id = c.doc_id
 WHERE c.id = ANY(%s::int[])
@@ -107,6 +108,10 @@ class RetrievedChunk:
     # строки «Применимо к:», когда чанк не сузил её сам. Не участвует
     # ни в поиске, ни в ранжировании.
     doc_models: list[str] = field(default_factory=list)
+    # Из какого мануала чанк. Нужен для метрики загрязнения: при нескольких
+    # документах в базе доля чужих чанков в топ-6 растёт раньше, чем портятся
+    # ответы, — это опережающий индикатор.
+    doc_filename: str = ""
     rrf_score: float = 0.0
 
     @property
@@ -189,7 +194,7 @@ async def retrieve(
             page_start, page_end, chunk_type, content,
             smcs_codes, part_numbers, applicable_models,
             control_module_, step_count, part_index, part_total,
-            safety_blocks, has_warning, doc_models,
+            safety_blocks, has_warning, doc_models, doc_filename,
         ) = row
         chunk_map[id_] = RetrievedChunk(
             id=id_,
@@ -210,6 +215,7 @@ async def retrieve(
             safety_blocks=safety_blocks or [],
             has_warning=has_warning,
             doc_models=doc_models or [],
+            doc_filename=doc_filename or "",
             rrf_score=id_to_score.get(id_, 0.0),
         )
 

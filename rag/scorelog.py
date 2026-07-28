@@ -119,6 +119,10 @@ def log_query(
             "backend": _active_backend(),
             "question": question,
             "chunk_ids": [c.id for c in chunks],
+            # Из каких мануалов собран контекст, в порядке chunk_ids.
+            # Метрика загрязнения: доля чужих документов в топ-6 растёт
+            # раньше, чем портятся ответы.
+            "doc_filenames": [c.doc_filename for c in chunks],
             "top1_sigmoid": round(scores[0], 6) if scores else None,
             "sigmoids": [round(s, 6) for s in scores],
             "top1_logit": round(logits[0], 4) if logits else None,
