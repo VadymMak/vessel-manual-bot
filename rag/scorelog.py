@@ -11,10 +11,18 @@ JSONL-лог скоров реранкера — сырьё для будуще�
 а не на четыре точки.
 
 Формат — одна JSON-строка на запрос:
-  ts, source, question, chunk_ids, top1_sigmoid, sigmoids,
+  ts, source, backend, question, chunk_ids, top1_sigmoid, sigmoids,
   top1_logit, logits, refused, answer_chars
 
 Порядок значений совпадает с порядком chunk_ids (то есть после реранкинга).
+
+Про backend. С 2026-07-28 реранкер умеет считать на ONNX int8 (rag/reranker.py),
+и квантизация сдвигает логиты: на замере 12 вопросов медиана расхождения 0.32,
+максимум 0.76. Для ранжирования это неважно — порядок топ-1 сохраняется, —
+но для калибровки порога отказа важно очень: 0.3 логита это заметная доля
+расстояния до худшего положительного примера (gs006, +0.15). Строки с разными
+backend нельзя складывать в одну выборку, иначе откалиброванный порог окажется
+средним по двум шкалам и не подойдёт ни к одной. Фильтруйте по этому полю.
 
 Про две шкалы. Боевой реранкер вызывает compute_score(normalize=True) и отдаёт
 СИГМОИДЫ, а разделение, ради которого всё затевалось, измерялось в ЛОГИТАХ.
@@ -53,6 +61,21 @@ def looks_like_refusal(answer: str) -> bool:
     return any(m in answer for m in _REFUSAL_MARKERS)
 
 
+def _active_backend() -> str:
+    """
+    Каким бэкендом реально посчитаны скоры.
+
+    Спрашиваем сам реранкер, а не settings.reranker_backend: настройка говорит,
+    чего просили, а атрибут — что загрузилось. Разойтись они не должны
+    (_load_onnx падает, если модели нет), но лог обязан фиксировать факт,
+    а не намерение — иначе однажды перепутанная выборка обойдётся дороже.
+    Импорт локальный: reranker тянет за собой torch, а лог зовут и оттуда.
+    """
+    from .reranker import Reranker
+
+    return Reranker().backend
+
+
 def _to_logit(p: float) -> float:
     """Обратная сигмоида с зажимом: p ровно 0 или 1 дало бы ±inf и сломало JSON."""
     p = min(max(float(p), 1e-9), 1 - 1e-9)
@@ -78,6 +101,7 @@ def log_query(
         record = {
             "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             "source": source,
+            "backend": _active_backend(),
             "question": question,
             "chunk_ids": [c.id for c in chunks],
             "top1_sigmoid": round(scores[0], 6) if scores else None,
