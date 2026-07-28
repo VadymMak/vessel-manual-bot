@@ -131,6 +131,28 @@ def _in_body(bbox: tuple[float, ...]) -> bool:
     return HEADER_CUTOFF <= bbox[1] <= FOOTER_CUTOFF
 
 
+HEADER_RULE_CUTOFF = 70.0
+
+
+def _is_header_rule(rect: fitz.Rect) -> bool:
+    """Отличить разделитель колонтитула от границы таблицы.
+
+    Под верхним колонтитулом на большинстве страниц проведена горизонтальная
+    линейка во всю ширину полосы (y≈62 и y≈64 — одинаково в SEBU7844-37
+    и в C18 Marine Generator Set). Она пересекает ОБЕ колонки, и если рядом
+    сверху страницы начинается таблица, кластеризация склеивает через эту
+    линейку левую колонку с правой.
+
+    Реальный случай: C18, стр. 140 — регион растянулся на (54…558) и проглотил
+    шаги 3–5 раздела Lubrication System вместе с Table 21 из правой колонки.
+    Проверка «последовательность шагов не разорвана» это поймала: разрыв 3 → 6.
+
+    Настоящие таблицы начинаются не выше y≈92: над сеткой всегда есть подпись
+    либо заголовок.
+    """
+    return rect.height < 3 and rect.width > 400 and rect.y0 < HEADER_RULE_CUTOFF
+
+
 def _table_regions(page: fitz.Page) -> list[fitz.Rect]:
     """Найти области таблиц по нарисованной сетке.
 
@@ -144,6 +166,7 @@ def _table_regions(page: fitz.Page) -> list[fitz.Rect]:
         if d.get("type") == "f"
         and (d["rect"].width < 3 or d["rect"].height < 3)
         and max(d["rect"].width, d["rect"].height) > 12
+        and not _is_header_rule(d["rect"])
     ]
     if not lines:
         return []
