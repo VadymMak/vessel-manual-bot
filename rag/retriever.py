@@ -18,26 +18,50 @@ from .embedder import Embedder, MAX_LEN_QUERY, sparse_to_pgvector_literal
 log = logging.getLogger(__name__)
 _embedder = Embedder()
 
+# ФИЛЬТР ПО МОДЕЛИ ДВИГАТЕЛЯ (правило 7 CLAUDE.md: в SQL WHERE, не в промпте).
+#
+# Применимость берётся с приоритетом: собственная разметка чанка, если она есть,
+# иначе унаследованная от документа. Ровно то же разрешение, что у строки
+# «Применимо к:» в rag/generator.py — они обязаны совпадать, иначе ответ будет
+# заявлять применимость, по которой его же и не нашли бы.
+#
+# Фильтровать ПО ЧАНКУ ОДНОМУ НЕЛЬЗЯ: собственную разметку несут 13 чанков
+# из 161, у остальных массив пуст, и `applicable_models && ARRAY['3512B']`
+# отсеял бы 92% базы вместе с правильными ответами. Пустой массив означает
+# «применимо ко всему семейству документа», а не «не применимо ни к чему».
+#
+# И это НЕ фильтр по документу: чанк C18 с собственной разметкой пройдёт
+# фильтр 3512B, если 3512B у него указан, а чанк SEBU7844 с разметкой
+# {3500C} под 3512B не пройдёт, хотя документ подходит.
+_MODEL_FILTER = """
+    (%s::text[] IS NULL OR
+     (CASE WHEN cardinality(c.applicable_models) > 0
+           THEN c.applicable_models
+           ELSE d.applicable_models END) && %s::text[])
+"""
+
 # %s-параметры: dense_vec, models_arr, models_arr, control_module, control_module, dense_vec, limit
-_DENSE_SQL = """
-SELECT id, 1 - (embedding_dense <=> %s::vector) AS score
-FROM chunks
+_DENSE_SQL = f"""
+SELECT c.id, 1 - (c.embedding_dense <=> %s::vector) AS score
+FROM chunks c
+JOIN documents d ON d.id = c.doc_id
 WHERE
-    (%s::text[] IS NULL OR applicable_models && %s::text[])
-    AND (%s::text IS NULL OR control_module = %s)
-ORDER BY embedding_dense <=> %s::vector
+{_MODEL_FILTER}
+    AND (%s::text IS NULL OR c.control_module = %s)
+ORDER BY c.embedding_dense <=> %s::vector
 LIMIT %s
 """
 
 # %s-параметры: sparse_literal, models_arr, models_arr, control_module, control_module, sparse_literal, limit
 # <#> возвращает −dot_product → ORDER BY <#> = убывание сходства
-_SPARSE_SQL = """
-SELECT id, -(embedding_sparse <#> %s::sparsevec) AS score
-FROM chunks
+_SPARSE_SQL = f"""
+SELECT c.id, -(c.embedding_sparse <#> %s::sparsevec) AS score
+FROM chunks c
+JOIN documents d ON d.id = c.doc_id
 WHERE
-    (%s::text[] IS NULL OR applicable_models && %s::text[])
-    AND (%s::text IS NULL OR control_module = %s)
-ORDER BY embedding_sparse <#> %s::sparsevec
+{_MODEL_FILTER}
+    AND (%s::text IS NULL OR c.control_module = %s)
+ORDER BY c.embedding_sparse <#> %s::sparsevec
 LIMIT %s
 """
 

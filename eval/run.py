@@ -95,7 +95,11 @@ def _check(answer: str, item: dict) -> EvalResult:
     )
 
 
-async def _run_one(item: dict, use_rerank: bool) -> EvalResult:
+async def _run_one(
+    item: dict,
+    use_rerank: bool,
+    models: list[str] | None = None,
+) -> EvalResult:
     from rag.retriever import retrieve
     from rag.reranker import Reranker
     from rag.generator import generate
@@ -104,7 +108,7 @@ async def _run_one(item: dict, use_rerank: bool) -> EvalResult:
     from rag.scorelog import log_query
 
     try:
-        candidates = await retrieve(item["question"])
+        candidates = await retrieve(item["question"], models=models)
         scores: list[float] = []
         if use_rerank and candidates:
             top, scores = Reranker().rerank_with_scores(
@@ -184,9 +188,14 @@ def _print_summary(results: list[EvalResult]) -> None:
               help="Список ID через запятую: gs001,gs007")
 @click.option("--no-rerank", is_flag=True,
               help="Пропустить реранкинг (быстрее, ниже качество)")
+@click.option("--models", "-m", "models", default=None,
+              help="Фильтр по модели двигателя: '3512B' или '3512B,3516B'. "
+                   "Идёт в SQL WHERE (правило 7 CLAUDE.md), не в промпт. "
+                   "Golden set при этом НЕ меняется — в этом смысл контроля.")
 @click.option("--golden-set", default="eval/golden_set.yaml",
               show_default=True, help="Путь к файлу golden set")
-def main(category: str | None, ids: str | None, no_rerank: bool, golden_set: str) -> None:
+def main(category: str | None, ids: str | None, no_rerank: bool,
+         models: str | None, golden_set: str) -> None:
     items: list[dict] = yaml.safe_load(Path(golden_set).read_text())
 
     if category:
@@ -199,12 +208,17 @@ def main(category: str | None, ids: str | None, no_rerank: bool, golden_set: str
         click.echo("Нет вопросов после фильтрации.", err=True)
         raise SystemExit(1)
 
-    click.echo(f"Запускаю {len(items)} вопросов…", err=True)
+    model_list = [m.strip() for m in models.split(",")] if models else None
+    click.echo(
+        f"Запускаю {len(items)} вопросов…"
+        + (f" фильтр по модели: {', '.join(model_list)}" if model_list else ""),
+        err=True,
+    )
 
     results: list[EvalResult] = []
     for i, item in enumerate(items):
         click.echo(f"  [{i+1}/{len(items)}] {item['id']}: {item['question'][:50]}…", err=True)
-        r = asyncio.run(_run_one(item, use_rerank=not no_rerank))
+        r = asyncio.run(_run_one(item, use_rerank=not no_rerank, models=model_list))
         results.append(r)
         status = "✓" if r.passed else "✗"
         click.secho(f"    {status}", fg="green" if r.passed else "red", err=True)

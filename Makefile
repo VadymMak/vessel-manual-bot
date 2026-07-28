@@ -108,8 +108,11 @@ load: check-env
 query: check-env
 	$(PYTHON) -m rag.cli "$(Q)" $(if $(CM),--cm "$(CM)",) $(if $(M),--models "$(M)",)
 
+# make eval                 — весь golden set, без фильтра
+# make eval M="3512B"       — с фильтром по модели двигателя (SQL WHERE)
+# make eval CAT=part_number — только одна категория
 eval: check-env
-	$(PYTHON) -m eval.run $(if $(CAT),--category $(CAT),)
+	$(PYTHON) -m eval.run $(if $(CAT),--category $(CAT),) $(if $(M),--models "$(M)",)
 
 dev:
 	uvicorn rag.api:app --reload --host 0.0.0.0 --port 8001
