@@ -130,19 +130,14 @@ def _rerank_scores(query: str, chunks: list[RetrievedChunk]) -> tuple[list[float
     """
     Сырые логиты реранкера для кандидатов, в порядке chunks.
 
-    normalize=False — сигмоиду считаем сами: второй вызов compute_score стоил бы
-    ещё ~37 с, а сигмоида монотонна и ранга не меняет.
+    Без сигмоиды: она монотонна, ранга не меняет, а разделение «есть ответ /
+    нет ответа» мерялось именно в логитах.
+
+    Через Reranker.logits, а не через _model напрямую: при RERANKER_BACKEND=onnx
+    поля _model просто нет, и прежний прямой вызов ронял трассировку.
     """
     from .reranker import Reranker
-    r = Reranker()
-    r._load()
-    pairs = [[query, c.content] for c in chunks]
-    t0 = time.monotonic()
-    scores = r._model.compute_score(pairs, normalize=False)
-    elapsed = time.monotonic() - t0
-    if isinstance(scores, float):
-        scores = [scores]
-    return [float(s) for s in scores], elapsed
+    return Reranker().logits(query, chunks)
 
 
 def _rank_of(ranked: list[tuple[int, float]], target_ids: set[int]) -> dict[int, tuple[int, float]]:
