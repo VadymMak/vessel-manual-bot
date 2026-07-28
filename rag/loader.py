@@ -200,8 +200,17 @@ async def _insert_chunk(
 
 async def load(
     chunks_path: str | None = None,
-    filename: str = "SEBU7844-37.pdf",
+    filename: str | None = None,
 ) -> None:
+    """
+    Загрузить chunks.json в PostgreSQL.
+
+    filename берётся из самого chunks.json (document.filename, кладёт
+    ingestion). Явный аргумент — только для старых файлов без метаданных.
+    Раньше здесь стояло значение по умолчанию 'SEBU7844-37.pdf', и загрузка
+    второго мануала молча удалила бы чанки первого: _delete_chunks работает
+    по doc_id, а doc_id брался по этому имени.
+    """
     chunks_path = chunks_path or settings.chunks_path
     raw = json.loads(Path(chunks_path).read_text())
     # Два формата: новый {document, chunks} и старый плоский список.
@@ -212,6 +221,16 @@ async def load(
     else:
         document = {}
         chunks = raw
+
+    filename = filename or document.get("filename")
+    if not filename:
+        raise ValueError(
+            f"В {chunks_path} нет document.filename, и имя не задано явно. "
+            "Переиндексируй PDF (make ingest F=...) или передай filename= — "
+            "угадывать нельзя: не тот doc_id удалит чужие чанки."
+        )
+    log.info("Документ: %s", filename)
+
     cache = _load_cache(settings.prefix_cache_path)
     client = AsyncOpenAI(api_key=settings.openai_api_key)
 
