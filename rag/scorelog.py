@@ -12,9 +12,21 @@ JSONL-лог скоров реранкера — сырьё для будуще�
 
 Формат — одна JSON-строка на запрос:
   ts, source, backend, question, chunk_ids, top1_sigmoid, sigmoids,
-  top1_logit, logits, refused, answer_chars
+  top1_logit, logits, refused, answer_chars,
+  applicability, control_modules, cm_ambiguous,
+  grounding_ok, claims_checked, claims, unverified
 
 Порядок значений совпадает с порядком chunk_ids (то есть после реранкинга).
+
+Про grounding. verify() вызывается на каждый запрос, но ОТВЕТ НЕ БЛОКИРУЕТСЯ —
+пишется только вердикт. Причина та же, что и с порогом отказа: частота ложных
+срабатываний регулярок неизвестна, а ложный отказ на судовой документации
+дороже пропущенной проверки. Замер на golden set 2026-07-28: сработал бы
+0 раз из 32 при 55 извлечённых значениях, ложных срабатываний нет. Но у 11
+ответов из 32 извлекать было нечего, и среди них есть содержательный —
+«прогонять 1 минуту»: RE_MEASUREMENT не знает единиц времени. То есть ноль
+срабатываний означает и «не мешает», и «местами не смотрит». Решение
+о блокировке принимается по накопленным данным, не здесь.
 
 Про backend. С 2026-07-28 реранкер умеет считать на ONNX int8 (rag/reranker.py),
 и квантизация сдвигает логиты: на замере 12 вопросов медиана расхождения 0.32,
@@ -92,9 +104,15 @@ def log_query(
     """
     try:
         from .generator import applicability_for, control_modules_in
+        from .verifier import verify
 
         logits = [_to_logit(s) for s in scores]
         cms = control_modules_in(chunks)
+        # ТОЛЬКО НАБЛЮДЕНИЕ. Вердикт пишется, ответ не блокируется:
+        # частота ложных срабатываний регулярок неизвестна, а ложный отказ
+        # на судовой документации дороже пропущенной проверки. Решение
+        # о блокировке принимается по накопленным данным, не здесь.
+        vr = verify(answer, chunks)
         record = {
             "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             "source": source,
@@ -115,6 +133,13 @@ def log_query(
             # исполнениях, какое ваше?») это задача этапа 4, не эта.
             "control_modules": cms,
             "cm_ambiguous": len(cms) > 1,
+            # Grounding, режим наблюдения. claims_checked обязателен рядом
+            # с grounding_ok: ok=true при claims_checked=0 означает не
+            # «всё подтвердилось», а «проверять было нечего».
+            "grounding_ok": vr.ok,
+            "claims_checked": len(vr.claims),
+            "claims": vr.claims,
+            "unverified": vr.unverified,
         }
         line = json.dumps(record, ensure_ascii=False)
         path = Path(settings.score_log_path)

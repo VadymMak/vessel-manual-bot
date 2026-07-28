@@ -30,6 +30,10 @@ RE_PART = re.compile(r"\b\d{3}-\d{4}\b|\b\d[A-Z]-\d{4}\b")
 class VerificationResult:
     ok: bool
     unverified: list[str] = field(default_factory=list)
+    # Сколько значений вообще нашлось в ответе. Без этого числа ok=True
+    # неотличимо от «регулярки не сматчили ничего»: и то, и другое даёт
+    # пустой unverified, но первое означает проверку, а второе — её отсутствие.
+    claims: list[str] = field(default_factory=list)
 
     def __str__(self) -> str:
         if self.ok:
@@ -58,4 +62,6 @@ def verify(answer: str, chunks: list[RetrievedChunk]) -> VerificationResult:
         if claim_norm not in context_norm:
             unverified.append(claim)
 
-    return VerificationResult(ok=len(unverified) == 0, unverified=unverified)
+    return VerificationResult(
+        ok=len(unverified) == 0, unverified=unverified, claims=claims,
+    )
