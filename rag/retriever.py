@@ -41,15 +41,22 @@ ORDER BY embedding_sparse <#> %s::sparsevec
 LIMIT %s
 """
 
+# JOIN к documents добавлен ради applicability документа: строка «Применимо к:»
+# в ответе собирается механически, и когда чанк применимость не сузил (а таких
+# большинство), берётся применимость документа с титульной страницы.
+# На ранжирование не влияет — это дозагрузка полей уже отобранных id,
+# порядок и отбор задаются dense/sparse-запросами выше.
 _FETCH_SQL = """
 SELECT
-    id, heading, icode, section,
-    page_start, page_end, chunk_type, content,
-    smcs_codes, part_numbers, applicable_models,
-    control_module, step_count, part_index, part_total,
-    safety_blocks, has_warning
-FROM chunks
-WHERE id = ANY(%s::int[])
+    c.id, c.heading, c.icode, c.section,
+    c.page_start, c.page_end, c.chunk_type, c.content,
+    c.smcs_codes, c.part_numbers, c.applicable_models,
+    c.control_module, c.step_count, c.part_index, c.part_total,
+    c.safety_blocks, c.has_warning,
+    d.applicable_models AS doc_models
+FROM chunks c
+JOIN documents d ON d.id = c.doc_id
+WHERE c.id = ANY(%s::int[])
 """
 
 
@@ -72,6 +79,10 @@ class RetrievedChunk:
     part_total: int
     safety_blocks: list[dict]
     has_warning: bool
+    # Применимость документа с титульной страницы — запасной уровень для
+    # строки «Применимо к:», когда чанк не сузил её сам. Не участвует
+    # ни в поиске, ни в ранжировании.
+    doc_models: list[str] = field(default_factory=list)
     rrf_score: float = 0.0
 
     @property
@@ -154,7 +165,7 @@ async def retrieve(
             page_start, page_end, chunk_type, content,
             smcs_codes, part_numbers, applicable_models,
             control_module_, step_count, part_index, part_total,
-            safety_blocks, has_warning,
+            safety_blocks, has_warning, doc_models,
         ) = row
         chunk_map[id_] = RetrievedChunk(
             id=id_,
@@ -174,6 +185,7 @@ async def retrieve(
             part_total=part_total,
             safety_blocks=safety_blocks or [],
             has_warning=has_warning,
+            doc_models=doc_models or [],
             rrf_score=id_to_score.get(id_, 0.0),
         )
 

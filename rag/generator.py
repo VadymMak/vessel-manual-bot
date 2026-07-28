@@ -22,6 +22,19 @@ from .retriever import RetrievedChunk
 
 log = logging.getLogger(__name__)
 
+# Формулировка отказа из правила 6. Держим оба языка. Живёт здесь, а не в
+# scorelog.py, потому что здесь же она и задаётся моделью в промпте: если
+# правило 6 однажды перепишут, детектор обязан поехать в том же файле.
+# scorelog.py импортирует отсюда.
+_REFUSAL_MARKERS = (
+    "не содержится в O&M Manual",
+    "is not in the O&M Manual",
+)
+
+
+def looks_like_refusal(answer: str) -> bool:
+    return any(m in answer for m in _REFUSAL_MARKERS)
+
 # ПОРЯДОК ВНУТРИ ПРАВИЛА 6 — РЕЗУЛЬТАТ ИЗМЕРЕНИЯ, НЕ СТИЛИСТИКА.
 # Прежняя формулировка («если ответа во фрагментах НЕТ — откажись») заставляла
 # gpt-4o-mini отказывать на вопросы к ячейкам таблиц, даже когда нужный чанк
@@ -34,6 +47,23 @@ log = logging.getLogger(__name__)
 # И ещё: сюда идёт РОВНО то, что читает модель. Пояснения к правкам держи
 # в комментариях модуля — абзац, вписанный в текст промпта, модель прочтёт
 # как инструкцию и поведение изменится.
+#
+# ПРАВИЛА 8 ЗДЕСЬ БОЛЬШЕ НЕТ, И ВОЗВРАЩАТЬ ЕГО НЕ НАДО. Оно требовало назвать
+# исполнение процедуры (ADEM II / ADEM III, Cat ELC / Cat DEAC) в ответе.
+# Теперь исполнение печатается механической шапкой из метаданных чанка
+# (applicability_line ниже), и просить модель помнить об этом незачем.
+#
+# Промежуточная редакция «варианты не смешивай, отвечай шагами ровно одного —
+# того, о котором спрашивают» выглядела безобидной страховкой, но замер
+# 2026-07-28 (5 прогонов на вопрос, gpt-4o-mini, temperature=0) показал:
+#     правило 8 сокращённое  gs031: 1/5 прошло, 4 отказа из 5
+#     правило 8 удалено      gs031: 4/5 прошло, 1 отказ из 5
+# gs031 («нужно ли выводить на высокие обороты при заполнении системы
+# охлаждения») исполнения не называет. Модель, обязанная отвечать шагами
+# «ровно одного варианта», не находила, какого именно, — и отказывала.
+# Контрольные вопросы на обеих редакциях 5/5: gs007/gs008 (выбор исполнения),
+# gs002/gs006 (таблицы), gs027/gs030 (честные отказы). То есть страховка
+# ничего не защищала, а ложные отказы создавала.
 _SYSTEM: dict[str, str] = {
     "ru": """\
 Ты — технический ассистент по судовым двигателям Caterpillar 3500B/3500C.
@@ -69,14 +99,6 @@ _SYSTEM: dict[str, str] = {
 
 7. Отвечай на языке вопроса. Технические термины давай с английским оригиналом:
    «зазор клапана (valve lash)», «блок управления (ADEM III)».
-
-8. Когда ты ОТВЕЧАЕШЬ процедурой, у которой в документе есть несколько
-   исполнений (ADEM II или ADEM III, Cat ELC или Cat DEAC), — НАЗОВИ выбранное
-   исполнение в ответе дословно, его кодом. Механик обязан видеть, к какому
-   варианту относится процедура: две процедуры air shutoff различаются числом
-   шагов, и перепутать их опаснее, чем не получить ответа.
-   Варианты между собой не смешивай.
-   Это правило не про отказ: если отвечать нечем, работает правило 6.
 """,
     "en": """\
 You are a technical assistant for Caterpillar 3500B/3500C marine engines.
@@ -111,14 +133,6 @@ STRICT RULES — any violation is unacceptable:
    Do NOT fabricate values. An honest refusal is better than a plausible error.
 
 7. Answer in the language of the question. Technical terms include the English original.
-
-8. When you DO answer with a procedure that exists in several variants in the
-   document (ADEM II or ADEM III, Cat ELC or Cat DEAC) — NAME the chosen variant
-   verbatim, by its code, in the answer. The mechanic must see which variant the
-   procedure belongs to: the two air shutoff procedures differ in step count,
-   and confusing them is more dangerous than getting no answer.
-   Never mix variants.
-   This rule is not about refusing: if there is nothing to answer, rule 6 applies.
 """,
 }
 
@@ -142,6 +156,113 @@ def _build_context(chunks: list[RetrievedChunk]) -> str:
             )
         )
     return "\n".join(parts)
+
+
+# ─── Применимость ────────────────────────────────────────────────────────────
+# Собирается МЕХАНИЧЕСКИ из метаданных чанка, а не просьбой к модели.
+#
+# Прежняя редакция правила 8 («назови исполнение дословно») стабилизировала
+# gs008, но роняла табличные gs002/gs003/gs006, а расширенная формулировка
+# обваливала honest_refusal с 5/5 до 1/5: модель принимала номер модели
+# двигателя из вопроса (3512C) за исполнение. Размен исчезает целиком, если
+# перестать просить модель это помнить: control_module и applicable_models
+# лежат в БД у каждого чанка, это факт, а не рассуждение.
+#
+# Берём метаданные ПЕРВОГО чанка после реранкинга: трассировка показывает, что
+# ответ строится на нём (для gs008 это id=230, ADEM II, логит +5.79 против
+# +5.03 у соседнего ADEM III).
+_APPLICABILITY_LABEL = {"ru": "Применимо к", "en": "Applies to"}
+_CM_PREFIX = {"ru": "двигатели с ", "en": "engines with "}
+
+# Сколько символов ответа подождать, прежде чем решать, печатать ли шапку.
+# Печатать её нужно ПЕРЕД ответом, а знать про отказ можно только увидев текст,
+# поэтому начало потока придерживаем. Отказ по правилу 6 — это весь ответ
+# целиком, его маркер стоит в первом предложении (~55 символов), так что 300
+# с запасом хватает, а задержка неощутима: это первые токены, они приходят
+# быстрее всего.
+_REFUSAL_PROBE_CHARS = 300
+
+
+def applicability_line(
+    chunks: list[RetrievedChunk],
+    lang: str = "ru",
+) -> str | None:
+    """
+    Строка применимости из метаданных первого чанка.
+
+    Применимость по умолчанию задаёт ДОКУМЕНТ, метаданные чанка её сужают:
+
+        есть control_module        → «двигатели с ADEM II» (+ модели чанка)
+        иначе есть applicable_models → перечислить их
+        иначе                       → applicable_models документа (титул)
+
+    Из 164 чанков SEBU7844-37 собственную разметку несут 13, и это не пробел:
+    большинство процедур применимо ко всему семейству и потому ничего
+    не перечисляет — процедуре очистки охладителя незачем называть шесть
+    моделей. Поэтому третий уровень и нужен: без него строка была бы
+    осмысленна на 13 чанках вместо 161.
+
+    None остаётся только для документа, у которого и на титуле ничего нет:
+    пустое «Применимо к: —» хуже, чем ничего, а выдумывать применимость
+    к судовому двигателю нельзя.
+    """
+    if not chunks:
+        return None
+    c = chunks[0]
+    label = _APPLICABILITY_LABEL.get(lang, _APPLICABILITY_LABEL["ru"])
+    prefix = _CM_PREFIX.get(lang, _CM_PREFIX["ru"])
+
+    def _clean(values: list[str] | None) -> list[str]:
+        return [v.strip() for v in (values or []) if v and v.strip()]
+
+    parts: list[str] = []
+    cm = (c.control_module or "").strip()
+    own_models = _clean(c.applicable_models)
+
+    if cm:
+        parts.append(f"{prefix}{cm}")
+        # Модели чанка рядом с исполнением: у air shutoff ADEM II это {3500B},
+        # и «двигатели с ADEM II · 3500B» точнее, чем одно из двух.
+        if own_models:
+            parts.append(", ".join(own_models))
+    elif own_models:
+        parts.append(", ".join(own_models))
+    else:
+        doc_models = _clean(c.doc_models)
+        if doc_models:
+            parts.append(", ".join(doc_models))
+
+    if not parts:
+        return None
+    return f"{label}: " + " · ".join(parts)
+
+
+def applicability_for(
+    query: str,
+    chunks: list[RetrievedChunk],
+    answer: str,
+) -> str | None:
+    """
+    Строка применимости для УЖЕ ГОТОВОГО ответа — структурное поле для UI
+    этапа 4 и для скор-лога.
+
+    Отдельно от applicability_line, потому что учитывает отказ: «Применимо к:
+    ADEM II. Этой информации нет в мануале» — абсурд, и он испортил бы
+    честные отказы. Ровно то же условие применяет generate() к тексту,
+    так что структурное поле и текст ответа не разойдутся.
+    """
+    if looks_like_refusal(answer):
+        return None
+    return applicability_line(chunks, _detect_lang(query))
+
+
+def control_modules_in(chunks: list[RetrievedChunk]) -> list[str]:
+    """Различные исполнения среди чанков, по алфавиту. Для скор-лога."""
+    return sorted({
+        (c.control_module or "").strip()
+        for c in chunks
+        if (c.control_module or "").strip()
+    })
 
 
 def _detect_lang(query: str) -> str:
@@ -187,7 +308,33 @@ async def generate(
         temperature=0.0,
         max_tokens=2000,
     )
+    # Шапка применимости идёт ПЕРЕД ответом, но печатать её нельзя, пока не
+    # ясно, не отказ ли это. Поэтому придерживаем начало потока (см. коммент
+    # к _REFUSAL_PROBE_CHARS), решаем один раз и дальше стримим как обычно.
+    line = applicability_line(chunks, lang)
+    head = ""
+    decided = False
+
     async for event in stream:
         delta = event.choices[0].delta.content
-        if delta:
+        if not delta:
+            continue
+        if decided:
             yield delta
+            continue
+        head += delta
+        if len(head) < _REFUSAL_PROBE_CHARS:
+            continue
+        if line and not looks_like_refusal(head):
+            yield f"{line}\n\n"
+        decided = True
+        yield head
+        head = ""
+
+    # Ответ оказался короче окна — решение принимаем на том, что пришло.
+    # Сюда попадают как раз отказы: они короткие.
+    if not decided:
+        if line and not looks_like_refusal(head):
+            yield f"{line}\n\n"
+        if head:
+            yield head

@@ -91,16 +91,43 @@ async def _get_or_generate_prefix(
 
 # ─── DB helpers ───────────────────────────────────────────────────────────────
 
-async def _ensure_document(conn: psycopg.AsyncConnection, filename: str) -> int:
+async def _ensure_document(
+    conn: psycopg.AsyncConnection,
+    filename: str,
+    document: dict | None = None,
+) -> int:
+    """
+    Создать или обновить запись документа.
+
+    applicable_models и serial_prefixes с титульной страницы — это
+    применимость ПО УМОЛЧАНИЮ для всех чанков документа, которые не сузили
+    её сами (см. migrations/002_document_applicability.sql).
+
+    COALESCE на пустой список намеренно: переиндексация старым chunks.json,
+    в котором метаданных документа нет, не должна стирать уже разобранный
+    титул. Пустой список означает «нечего сказать», а не «сотри».
+    """
+    document = document or {}
+    models = document.get("applicable_models") or []
+    prefixes = document.get("serial_prefixes") or []
     async with conn.cursor() as cur:
         await cur.execute(
             """
-            INSERT INTO documents (filename)
-            VALUES (%s)
-            ON CONFLICT (filename) DO UPDATE SET indexed_at = now()
+            INSERT INTO documents (filename, applicable_models, serial_prefixes)
+            VALUES (%s, %s, %s)
+            ON CONFLICT (filename) DO UPDATE SET
+                indexed_at = now(),
+                applicable_models = CASE
+                    WHEN cardinality(EXCLUDED.applicable_models) > 0
+                    THEN EXCLUDED.applicable_models
+                    ELSE documents.applicable_models END,
+                serial_prefixes = CASE
+                    WHEN cardinality(EXCLUDED.serial_prefixes) > 0
+                    THEN EXCLUDED.serial_prefixes
+                    ELSE documents.serial_prefixes END
             RETURNING id
             """,
-            (filename,),
+            (filename, models, prefixes),
         )
         row = await cur.fetchone()
         return row[0]
@@ -176,7 +203,15 @@ async def load(
     filename: str = "SEBU7844-37.pdf",
 ) -> None:
     chunks_path = chunks_path or settings.chunks_path
-    chunks: list[dict] = json.loads(Path(chunks_path).read_text())
+    raw = json.loads(Path(chunks_path).read_text())
+    # Два формата: новый {document, chunks} и старый плоский список.
+    # Старый читаем как раньше — переиндексировать всё ради формата незачем.
+    if isinstance(raw, dict):
+        document: dict = raw.get("document") or {}
+        chunks: list[dict] = raw["chunks"]
+    else:
+        document = {}
+        chunks = raw
     cache = _load_cache(settings.prefix_cache_path)
     client = AsyncOpenAI(api_key=settings.openai_api_key)
 
@@ -203,7 +238,7 @@ async def load(
 
     # 3. Вставка в БД
     async with await psycopg.AsyncConnection.connect(settings.db_dsn) as conn:
-        doc_id = await _ensure_document(conn, filename)
+        doc_id = await _ensure_document(conn, filename, document)
         deleted = await _delete_chunks(conn, doc_id)
         if deleted:
             log.info("Удалено %d старых чанков для doc_id=%d", deleted, doc_id)

@@ -48,17 +48,11 @@ log = logging.getLogger(__name__)
 # Дозапись из нескольких потоков: строки короткие, но рвать их нельзя.
 _write_lock = threading.Lock()
 
-# Формулировка отказа из правила 6 системного промпта. Держим оба языка:
-# по ней и только по ней определяется refused — эвристики вроде «ответ короткий»
-# врут (короткий ответ на вопрос о номере детали — это норма).
-_REFUSAL_MARKERS = (
-    "не содержится в O&M Manual",
-    "is not in the O&M Manual",
-)
-
-
-def looks_like_refusal(answer: str) -> bool:
-    return any(m in answer for m in _REFUSAL_MARKERS)
+# looks_like_refusal переехал в rag/generator.py — туда, где формулировка отказа
+# и задаётся моделью (правило 6). Детектор обязан жить рядом с текстом, который
+# он ищет, иначе при переписывании правила разъедется молча.
+# Реэкспорт: на него ссылались извне, ломать импорты незачем.
+from .generator import looks_like_refusal  # noqa: E402,F401
 
 
 def _active_backend() -> str:
@@ -97,7 +91,10 @@ def log_query(
     а не транзакционный.
     """
     try:
+        from .generator import applicability_for, control_modules_in
+
         logits = [_to_logit(s) for s in scores]
+        cms = control_modules_in(chunks)
         record = {
             "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             "source": source,
@@ -110,6 +107,14 @@ def log_query(
             "logits": [round(x, 4) for x in logits],
             "refused": looks_like_refusal(answer),
             "answer_chars": len(answer),
+            # Применимость: что реально ушло в шапку ответа (null при отказе
+            # и при отсутствии метаданных).
+            "applicability": applicability_for(question, chunks, answer),
+            # Краевой случай 3: в топ-6 приехали разные исполнения. Пока просто
+            # фиксируем факт — разрешение неоднозначности («нашлось в двух
+            # исполнениях, какое ваше?») это задача этапа 4, не эта.
+            "control_modules": cms,
+            "cm_ambiguous": len(cms) > 1,
         }
         line = json.dumps(record, ensure_ascii=False)
         path = Path(settings.score_log_path)

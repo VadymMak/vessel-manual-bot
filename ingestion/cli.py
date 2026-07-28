@@ -6,7 +6,7 @@ import argparse
 from collections import Counter
 from pathlib import Path
 
-from .pipeline import ingest, to_json
+from .pipeline import ingest, parse_title_page, to_json
 
 
 def main() -> int:
@@ -18,10 +18,14 @@ def main() -> int:
     args = ap.parse_args()
 
     chunks = ingest(args.pdf, args.first, args.last)
-    to_json(chunks, args.out)
+    document = parse_title_page(args.pdf)
+    to_json(chunks, args.out, document)
 
     lengths = sorted(len(c.content) for c in chunks)
     print(f"Документ:  {args.pdf.name}")
+    print(f"Модели:    {', '.join(document['applicable_models']) or '— (нет на титуле)'}")
+    print(f"Серийные:  {len(document['serial_prefixes'])} префиксов"
+          f"{' — ' + ', '.join(document['serial_prefixes'][:5]) + ', …' if document['serial_prefixes'] else ''}")
     print(f"Чанков:    {len(chunks)}")
     print(f"Типы:      {dict(Counter(c.chunk_type for c in chunks))}")
     print(f"С WARNING: {sum(1 for c in chunks if c.has_warning)}")
