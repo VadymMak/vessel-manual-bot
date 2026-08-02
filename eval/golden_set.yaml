@@ -30,6 +30,27 @@
 #   строгое. Список альтернатив НЕ повод внести туда то, что система сейчас
 #   отвечает; он нужен только там, где верны оба варианта.
 #   expected_pages:    [start, end] — ссылка на страницы из документа
+#
+#   target_chunk:      НЕОБЯЗАТЕЛЬНОЕ. Описание чанка, который поиск обязан
+#                      поднять наверх. Используется только ретривальной
+#                      оценкой (make eval-retrieval), на make eval не влияет.
+#
+#                      Чанк задаётся ПО СОДЕРЖИМОМУ, а не по id: id меняются
+#                      при каждой переиндексации, содержимое нет.
+#                      Поля складываются по И:
+#                        doc                — имя файла документа
+#                        heading_startswith — начало заголовка чанка
+#                        content_contains   — подстрока в тексте чанка
+#                        control_module     — 'ADEM II' | 'ADEM III'
+#
+#                      Предикат МОЖЕТ совпасть с несколькими чанками, и это
+#                      законно: длинная процедура разбита на части, а блоки
+#                      WARNING/NOTICE по правилу 4 CLAUDE.md дублируются
+#                      в каждую часть. Метрика берёт лучший ранг из совпавших.
+#
+#                      У вопросов категории honest_refusal целевого чанка нет
+#                      по определению — правильного ответа в мануале не
+#                      существует. Они из ретривальной метрики исключаются.
 #   category:
 #     number_accuracy  — точность числового значения с единицами
 #     part_number      — номер детали
@@ -47,6 +68,10 @@
     - "205 kPa"
     - "30 psi"
   expected_pages: [68, 68]
+  target_chunk:
+    doc: SEBU7844-37.pdf
+    heading_startswith: "Aftercooler Core"
+    content_contains: "205 kPa (30 psi)"
   notes: "WARNING block в чанке 66: 'Maximum air pressure at the nozzle must be less than 205 kPa (30 psi)'"
 
 - id: gs002
@@ -55,6 +80,10 @@
   expected_contains:
     - "1U-5490"
   expected_pages: [68, 68]
+  target_chunk:
+    doc: SEBU7844-37.pdf
+    heading_startswith: "Aftercooler Core"
+    content_contains: "1U-5490"
   notes: "Table 38 в чанке 66: 1U-5490 Hydrosolv 4165 19 L (5 US gal)"
 
 - id: gs003
@@ -63,6 +92,10 @@
   expected_contains:
     - "174-6854"
   expected_pages: [68, 68]
+  target_chunk:
+    doc: SEBU7844-37.pdf
+    heading_startswith: "Aftercooler Core"
+    content_contains: "174-6854"
   notes: "Table 38 в чанке 66: 174-6854 Hydrosolv 100 19 L (5 US gal)"
 
 - id: gs004
@@ -72,6 +105,10 @@
     - "93"
     - "200"
   expected_pages: [68, 68]
+  target_chunk:
+    doc: SEBU7844-37.pdf
+    heading_startswith: "Aftercooler Core"
+    content_contains: "93°C (200°F)"
   notes: "Чанк 66: 'Use a 2 to 5 percent concentration of the cleaner at temperatures up to 93°C (200°F)'"
 
 - id: gs005
@@ -81,6 +118,10 @@
     - "2"
     - "5"
   expected_pages: [68, 68]
+  target_chunk:
+    doc: SEBU7844-37.pdf
+    heading_startswith: "Aftercooler Core"
+    content_contains: "2 to 5 percent"
   notes: "Чанк 66: '2 to 5 percent concentration'"
 
 - id: gs006
@@ -90,6 +131,10 @@
     - "19 L"
     - "5 US gal"
   expected_pages: [68, 68]
+  target_chunk:
+    doc: SEBU7844-37.pdf
+    heading_startswith: "Aftercooler Core"
+    content_contains: "1U-5490"
   notes: "Чанк 66: таблица Hydrosolv cleaners"
 
 # ─── 2. Air Shutoff — вариантный тест ────────────────────────────────────────
@@ -102,6 +147,10 @@
   must_not_contain:
     - "5 steps"       # это ADEM II — недопустимо вернуть не тот вариант
   expected_pages: [68, 70]
+  target_chunk:
+    doc: SEBU7844-37.pdf
+    heading_startswith: "Air Shutoff - Test"
+    control_module: "ADEM III"
   notes: "Чанк 68: 8 шагов для ADEM III, страницы 68-70. НЕ ДОЛЖНО вернуть вариант ADEM II (5 шагов)."
 
 - id: gs008
@@ -111,6 +160,10 @@
     - "ADEM II"
   must_not_contain: []
   expected_pages: [68, 69]
+  target_chunk:
+    doc: SEBU7844-37.pdf
+    heading_startswith: "Air Shutoff - Test"
+    control_module: "ADEM II"
   notes: "Чанк 67: 5 шагов для ADEM II, страницы 68-69."
 
 - id: gs009
@@ -119,6 +172,10 @@
   expected_contains:
     - ["close", "закр"]          # закроются / закрыться / закрыты
   expected_pages: [68, 70]
+  target_chunk:
+    doc: SEBU7844-37.pdf
+    heading_startswith: "Air Shutoff - Test"
+    control_module: "ADEM III"
   notes: "Чанк 68, шаг 2: 'Both air shutoff gates should close'"
 
 - id: gs010
@@ -127,6 +184,10 @@
   expected_contains:
     - ["OPEN", "открыт"]        # «в положении OPEN» / «в открытом положении»
   expected_pages: [68, 70]
+  target_chunk:
+    doc: SEBU7844-37.pdf
+    heading_startswith: "Air Shutoff - Test"
+    control_module: "ADEM III"
   notes: "Чанк 68, шаг 1: 'Ensure that both air shutoff gates are latched in the OPEN position'"
 
 - id: gs011
@@ -135,6 +196,10 @@
   expected_contains:
     - ["wiring", "проводк"]     # проводку / проводка / проводки
   expected_pages: [68, 70]
+  target_chunk:
+    doc: SEBU7844-37.pdf
+    heading_startswith: "Air Shutoff - Test"
+    control_module: "ADEM III"
   notes: "Чанк 68, шаг 1: 'check the wiring for the air shutoffs'"
 
 # ─── 3. Coolant - Change: ELC vs DEAC ────────────────────────────────────────
@@ -146,6 +211,10 @@
     - "3"
   must_not_contain: []
   expected_pages: [79, 81]
+  target_chunk:
+    doc: SEBU7844-37.pdf
+    heading_startswith: "Coolant - Change"
+    content_contains: "Systems Filled with Cat DEAC"
   notes: "Чанк 85: процедура DEAC начинается с шага 3 (Caterpillar так нумерует, не с 1). Это ключевой инвариант — нельзя путать с ELC."
 
 - id: gs013
@@ -154,6 +223,10 @@
   expected_contains:
     - "30"
   expected_pages: [79, 81]
+  target_chunk:
+    doc: SEBU7844-37.pdf
+    heading_startswith: "Coolant - Change"
+    content_contains: "minimum of 30 minutes"
   notes: "Чанк 85, шаг 8: 'run the engine at low idle for a minimum of 30 minutes'"
 
 - id: gs014
@@ -163,6 +236,10 @@
     - "82"
     - "180"
   expected_pages: [79, 81]
+  target_chunk:
+    doc: SEBU7844-37.pdf
+    heading_startswith: "Coolant - Change"
+    content_contains: "at least 82"
   notes: "Чанк 85, шаг 8: 'coolant temperature should be at least 82 °C (180 °F)'"
 
 - id: gs015
@@ -172,6 +249,10 @@
     - "0.5 L"
     - "15 L"
   expected_pages: [79, 81]
+  target_chunk:
+    doc: SEBU7844-37.pdf
+    heading_startswith: "Coolant - Change"
+    content_contains: "per 15 L"
   notes: "Чанк 85, шаг 6: '0.5 L (1 pint) of cleaner per 15 L (4 US gal)'"
 
 - id: gs016
@@ -181,6 +262,10 @@
     - "19 L"
     - "5 US gal"
   expected_pages: [79, 81]
+  target_chunk:
+    doc: SEBU7844-37.pdf
+    heading_startswith: "Coolant - Change"
+    content_contains: "no faster than 19 L"
   notes: "Чанк 85, NOTICE: 'Fill the cooling system no faster than 19 L (5 US gal) per minute'"
 
 - id: gs017
@@ -190,6 +275,10 @@
     - "49"
     - "66"
   expected_pages: [79, 80]
+  target_chunk:
+    doc: SEBU7844-37.pdf
+    heading_startswith: "Coolant - Change"
+    content_contains: "Cat ELC, Cat ELI"
   notes: "Чанк 84, шаг 4: 'until the temperature reaches 49 to 66 °C (120 to 150 °F)'"
 
 - id: gs018
@@ -198,6 +287,10 @@
   expected_contains:
     - "90"
   expected_pages: [79, 81]
+  target_chunk:
+    doc: SEBU7844-37.pdf
+    heading_startswith: "Coolant - Change"
+    content_contains: "90 minutes"
   notes: "Чанк 85, шаг 8: 'For cooling systems with heavy deposits or plugging, run the engine for 90 minutes'"
 
 - id: gs019
@@ -207,6 +300,10 @@
     - "0.5 L"
     - "3.8"
   expected_pages: [79, 81]
+  target_chunk:
+    doc: SEBU7844-37.pdf
+    heading_startswith: "Coolant - Change"
+    content_contains: "3.8 to 7.6"
   notes: "Чанк 85, шаг 6: '0.5 L (1 pint) of cleaner per 3.8 to 7.6 L (1 to 2 US gal)'"
 
 # ─── 4. Fill Cooling System ───────────────────────────────────────────────────
@@ -218,6 +315,10 @@
     - "13 mm"
     - "0.5 inch"
   expected_pages: [79, 81]
+  target_chunk:
+    doc: SEBU7844-37.pdf
+    heading_startswith: "Coolant - Change"
+    content_contains: "13 mm (0.5 inch) below"
   notes: "Чанк 86, шаг 3: 'within 13 mm (0.5 inch) below the bottom of the pipe for filling'"
 
 - id: gs021
@@ -226,6 +327,10 @@
   expected_contains:
     - ["1 minute", "1 минут"]   # 1 минуту / 1 минуты
   expected_pages: [79, 81]
+  target_chunk:
+    doc: SEBU7844-37.pdf
+    heading_startswith: "Coolant - Change"
+    content_contains: "high idle for 1 minute"
   notes: "Чанк 86, шаг 2: 'Run the engine at high idle for 1 minute to purge the air'"
 
 # ─── 5. Battery ──────────────────────────────────────────────────────────────
@@ -236,6 +341,10 @@
   expected_contains:
     - "1U-9921"
   expected_pages: [75, 76]
+  target_chunk:
+    doc: SEBU7844-37.pdf
+    heading_startswith: "Battery Electrolyte Level"
+    content_contains: "1U-9921"
   notes: "Чанк 77: parts 1U-9921, 245-5829"
 
 # ─── 6. Centrifugal Oil Filter ────────────────────────────────────────────────
@@ -246,6 +355,10 @@
   expected_contains:
     - "185-3630"
   expected_pages: [77, 79]
+  target_chunk:
+    doc: SEBU7844-37.pdf
+    heading_startswith: "Centrifugal Oil Filter"
+    content_contains: "185-3630"
   notes: "Чанк 81, Table 39: Tool A = 185-3630 Strap Wrench Assembly"
 
 - id: gs024
@@ -254,6 +367,10 @@
   expected_contains:
     - "8T-5096"
   expected_pages: [77, 79]
+  target_chunk:
+    doc: SEBU7844-37.pdf
+    heading_startswith: "Centrifugal Oil Filter"
+    content_contains: "8T-5096"
   notes: "Чанк 81, Table 39: Tool C = 8T-5096 Dial Indicator Group"
 
 - id: gs025
@@ -262,6 +379,10 @@
   expected_contains:
     - "8T-0890"
   expected_pages: [77, 79]
+  target_chunk:
+    doc: SEBU7844-37.pdf
+    heading_startswith: "Centrifugal Oil Filter"
+    content_contains: "8T-0890"
   notes: "Чанк 81, Table 39: Tool B = 8T-0890 Puller Group"
 
 # ─── 7. Fuel System ──────────────────────────────────────────────────────────
@@ -273,6 +394,10 @@
     - "103 kPa"
     - "15 psi"
   expected_pages: [106, 107]
+  target_chunk:
+    doc: SEBU7844-37.pdf
+    heading_startswith: "Fuel System Secondary Filter"
+    content_contains: "103 kPa (15 psi)"
   notes: "Чанк 119: back pressure 103 kPa (15 psi) — порог замены"
 
 # ─── 8. Честный отказ — критически важные случаи ─────────────────────────────
@@ -322,6 +447,10 @@
     - ["high idle", "высоких оборот", "высокие оборот"]
     - ["1 minute", "1 минут"]
   expected_pages: [79, 81]
+  target_chunk:
+    doc: SEBU7844-37.pdf
+    heading_startswith: "Coolant - Change"
+    content_contains: "high idle for 1 minute"
   notes: "Чанк 86, шаг 2: прогон на high idle 1 минуту для удаления воздуха из полостей блока"
 
 - id: gs032
@@ -330,4 +459,8 @@
   expected_contains:
     - ["copper", "медн", "меди"] # медные компоненты / повреждение меди
   expected_pages: [79, 81]
+  target_chunk:
+    doc: SEBU7844-37.pdf
+    heading_startswith: "Coolant - Change"
+    content_contains: "damage to copper"
   notes: "Чанк 85, NOTICE: 'Improper or incomplete rinsing... can result in damage to copper and other metal components'"
