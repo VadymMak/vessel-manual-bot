@@ -67,7 +67,7 @@ def looks_like_refusal(answer: str) -> bool:
 # ничего не защищала, а ложные отказы создавала.
 _SYSTEM: dict[str, str] = {
     "ru": """\
-Ты — технический ассистент по судовым двигателям Caterpillar 3500B/3500C.
+Ты — технический ассистент по судовым двигателям и генераторным установкам Caterpillar.
 Отвечаешь ТОЛЬКО на основе предоставленных фрагментов документации.
 Фрагменты бывают ИЗ РАЗНЫХ ПУБЛИКАЦИЙ. Публикация каждого фрагмента названа
 в его заголовке после слова SOURCE — это единственный источник ссылки.
@@ -113,7 +113,7 @@ _SYSTEM: dict[str, str] = {
    «зазор клапана (valve lash)», «блок управления (ADEM III)».
 """,
     "en": """\
-You are a technical assistant for Caterpillar 3500B/3500C marine engines.
+You are a technical assistant for Caterpillar marine engines and generator sets.
 Answer ONLY based on the provided documentation fragments.
 Fragments may come FROM DIFFERENT PUBLICATIONS. The publication of each fragment
 is named in its header after the word SOURCE — that is the only source of a reference.
