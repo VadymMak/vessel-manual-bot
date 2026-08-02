@@ -50,10 +50,10 @@ LOAD_ENV = set -a; . ./.env; set +a;
 # ПОРЯДОК ЦЕЛЕЙ В СТРОКЕ ЗНАЧИМ: `load` первым словом строки GNU make 4.x
 # разбирает как директиву load (загрузка динамического объекта) и падает с
 # «load: cannot open shared object file». Поэтому load стоит не первым.
-query load eval: export OMP_NUM_THREADS=8
-query load eval: export MKL_NUM_THREADS=8
+query load eval eval-retrieval: export OMP_NUM_THREADS=8
+query load eval eval-retrieval: export MKL_NUM_THREADS=8
 
-.PHONY: check-py install ingest verify migrate load query eval psql dev clean check-env
+.PHONY: check-py install ingest verify migrate load query eval eval-retrieval psql dev clean check-env
 
 # ─── Этап 1: ingestion ───────────────────────────────────────────────────────
 install: 
@@ -113,6 +113,19 @@ query: check-env
 # make eval CAT=part_number — только одна категория
 eval: check-env
 	$(PYTHON) -m eval.run $(if $(CAT),--category $(CAT),) $(if $(M),--models "$(M)",)
+
+# ─── Ретривальная оценка ─────────────────────────────────────────────────────
+# Детерминированная, БЕЗ OpenAI: эмбеддинг запроса, Neon, реранкер. Одного
+# прогона достаточно, результат точный. Мерить правки поиска надо этим, а не
+# make eval: генерация дрейфует у провайдера и топит сигнал поиска.
+#
+# make eval-retrieval               — все размеченные вопросы
+# make eval-retrieval M="3512B"     — с фильтром по модели двигателя
+# make eval-retrieval CAT=correct_variant
+# make eval-retrieval IDS=gs007,gs008
+eval-retrieval: check-env
+	$(PYTHON) -m eval.retrieval $(if $(CAT),--category $(CAT),) \
+		$(if $(M),--models "$(M)",) $(if $(IDS),--ids $(IDS),)
 
 dev:
 	uvicorn rag.api:app --reload --host 0.0.0.0 --port 8001

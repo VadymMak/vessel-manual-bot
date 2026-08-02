@@ -82,7 +82,8 @@ RAG-система по судовой технической документа
 ```
 make ingest F=path/to.pdf   # индексация одного PDF в JSON
 make verify                 # прогон инвариантов чанкинга
-make eval                   # golden set (этап 2)
+make eval                   # golden set целиком: поиск + генерация
+make eval-retrieval         # только поиск, без OpenAI — детерминирован, точен
 make dev                    # uvicorn --reload + next dev
 ```
 
