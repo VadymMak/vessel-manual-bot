@@ -3,8 +3,12 @@
 
 Алгоритм:
   1. Для каждого чанка генерируем contextual prefix через gpt-4o-mini
-     (1-2 предложения: «фрагмент из O&M Manual SEBU7844-37, секция ..., процедура ...»).
-  2. Кэшируем префиксы на диск по SHA-256 содержимого — переиндексация не платит повторно.
+     (1-2 предложения: «фрагмент из O&M Manual <публикация>, секция ...,
+     процедура ...»). Публикация и модели берутся из метаданных ЭТОГО
+     документа, не из константы.
+  2. Кэшируем префиксы на диск по SHA-256 от «документ + содержимое» —
+     переиндексация не платит повторно, а одинаковый текст в разных
+     мануалах не делит одну запись.
   3. Эмбеддируем: context_prefix + "\n\n" + content.
   4. Перед вставкой удаляем старые чанки документа (дедупликация через DELETE).
   5. Вставляем батчами, коммитим каждые 20 чанков.
@@ -46,19 +50,64 @@ def _save_cache(cache: dict[str, str], path: str) -> None:
     Path(path).write_text(json.dumps(cache, ensure_ascii=False, indent=2))
 
 
-def _chunk_key(chunk: dict) -> str:
-    return hashlib.sha256(chunk["content"].encode()).hexdigest()[:16]
+def _document_id(document: dict) -> str:
+    """Идентификатор публикации: имя файла без расширения.
+
+    Тот же уровень, что и у ссылки в ответе (rag/generator.py,
+    _publication_id). Когда в documents появится publication_no,
+    менять надо обе функции — и обязательно вместе: если префикс в векторе
+    и ссылка в ответе назовут документ по-разному, расхождение всплывёт
+    не в тесте, а в выдаче механику.
+    """
+    name = (document.get("filename") or "").strip()
+    if not name:
+        return "unknown document"
+    return name[:-4] if name.lower().endswith(".pdf") else name
 
 
-async def _generate_prefix(chunk: dict, client: AsyncOpenAI) -> str:
+def _document_line(document: dict) -> str:
+    """Строка «Document:» для запроса префикса — из метаданных ЭТОГО документа.
+
+    Раньше здесь стояла константа «SEBU7844-37 — Caterpillar 3500B/3500C
+    Marine Engine». Последствие замерено на боевой базе: из 233 чанков
+    C18-MarineGenSet 197 получили префикс со словом SEBU7844, 223 —
+    с «3500B/3500C». Префикс идёт в эмбеддинг (см. load(), шаг 2), то есть
+    весь второй мануал векторизован как если бы он был первым.
+
+    Модели не выдумываем: если титульная страница их не дала, строка про
+    двигатели просто не печатается. Пустое «Caterpillar  Marine Engine»
+    хуже, чем его отсутствие.
+    """
+    models = [m for m in (document.get("applicable_models") or []) if m]
+    engines = f" — Caterpillar {', '.join(models)}" if models else ""
+    return f"Document: {_document_id(document)}{engines} Operation & Maintenance Manual"
+
+
+def _chunk_key(chunk: dict, document: dict) -> str:
+    """Ключ кэша префиксов: документ + содержимое.
+
+    По одному только content ключ был КОЛЛИЗИОННЫМ, и не гипотетически:
+    в базе 12 пар чанков с побайтово одинаковым content в разных мануалах
+    (General Hazard Information, Hoses and Clamps - Inspect/Replace,
+    Battery Electrolyte Level - Check и др.). Они делили одну запись кэша,
+    и второй документ получал префикс, сочинённый для первого.
+
+    Побочный эффект добавления документа в ключ полезен: все старые записи
+    кэша становятся недостижимы, и префиксы, сочинённые со старой
+    константой, перегенерируются, а не подставляются молча.
+    """
+    payload = f"{_document_id(document)}\n{chunk['content']}"
+    return hashlib.sha256(payload.encode()).hexdigest()[:16]
+
+
+async def _generate_prefix(chunk: dict, document: dict, client: AsyncOpenAI) -> str:
     pages = (
         f"p. {chunk['page_start']}"
         if chunk["page_start"] == chunk["page_end"]
         else f"pp. {chunk['page_start']}–{chunk['page_end']}"
     )
     user_msg = (
-        f"Document: SEBU7844-37 — Caterpillar 3500B/3500C Marine Engine "
-        f"Operation & Maintenance Manual\n"
+        f"{_document_line(document)}\n"
         f"Section: {chunk.get('section') or 'General'}\n"
         f"Heading: {chunk['heading']}\n"
         f"Type: {chunk['chunk_type']}, pages: {pages}\n\n"
@@ -78,13 +127,14 @@ async def _generate_prefix(chunk: dict, client: AsyncOpenAI) -> str:
 
 async def _get_or_generate_prefix(
     chunk: dict,
+    document: dict,
     cache: dict[str, str],
     client: AsyncOpenAI,
 ) -> str:
-    key = _chunk_key(chunk)
+    key = _chunk_key(chunk, document)
     if key in cache:
         return cache[key]
-    prefix = await _generate_prefix(chunk, client)
+    prefix = await _generate_prefix(chunk, document, client)
     cache[key] = prefix
     return prefix
 
@@ -229,7 +279,11 @@ async def load(
             "Переиндексируй PDF (make ingest F=...) или передай filename= — "
             "угадывать нельзя: не тот doc_id удалит чужие чанки."
         )
-    log.info("Документ: %s", filename)
+    # Имя из явного аргумента возвращаем в document: префикс и ключ кэша
+    # строятся по document, и для старого плоского формата (document = {})
+    # они иначе получили бы «unknown document» при известном имени файла.
+    document.setdefault("filename", filename)
+    log.info("Документ: %s (%s)", filename, _document_line(document))
 
     cache = _load_cache(settings.prefix_cache_path)
     client = AsyncOpenAI(api_key=settings.openai_api_key)
@@ -237,7 +291,9 @@ async def load(
     # 1. Contextual prefixes (с кэшированием)
     log.info("Генерирую контекстуальные префиксы (%d чанков)…", len(chunks))
     for i, chunk in enumerate(chunks):
-        chunk["_prefix"] = await _get_or_generate_prefix(chunk, cache, client)
+        chunk["_prefix"] = await _get_or_generate_prefix(
+            chunk, document, cache, client
+        )
         if (i + 1) % 20 == 0:
             _save_cache(cache, settings.prefix_cache_path)
             log.info("  %d/%d префиксов готово", i + 1, len(chunks))
