@@ -102,9 +102,13 @@ async def _stages(query: str) -> dict:
                 await cur.execute(_FETCH_SQL, (top_ids,))
                 by_id = {}
                 for row in await cur.fetchall():
+                    # Колонки перечислены ЯВНО и в порядке _FETCH_SQL. Позиционная
+                    # распаковка здесь уже ломалась: после добавления doc_models
+                    # и doc_filename запрос стал отдавать 19 колонок против 17,
+                    # и трассировка падала на ValueError, хотя боевой путь работал.
                     (id_, heading, icode, section, page_start, page_end, chunk_type,
                      content, smcs, pns, models, cm, step_count, part_index,
-                     part_total, safety, has_warning) = row
+                     part_total, safety, has_warning, doc_models, doc_filename) = row
                     by_id[id_] = RetrievedChunk(
                         id=id_, heading=heading, icode=icode, section=section,
                         page_start=page_start, page_end=page_end, chunk_type=chunk_type,
@@ -113,6 +117,7 @@ async def _stages(query: str) -> dict:
                         step_count=step_count, part_index=part_index,
                         part_total=part_total, safety_blocks=safety or [],
                         has_warning=has_warning,
+                        doc_models=doc_models or [], doc_filename=doc_filename or "",
                     )
                 chunks = [by_id[i] for i in top_ids if i in by_id]
 
@@ -249,9 +254,13 @@ async def _trace_one(qid: str, item: dict, do_rerank: bool = True) -> None:
     click.secho(f"\nИтоговая шестёрка в контекст генерации:", bold=True)
     for i, (sc, c) in enumerate(ranked[: settings.rerank_top_n]):
         mark = " ←ЦЕЛЬ" if c.id in target_ids else ""
+        # Документ печатается рядом со страницей намеренно: при нескольких
+        # мануалах «стр. 104» без имени публикации ничего не значит — стр. 104
+        # есть в каждом из них, и в разных о разном.
         click.echo(
             f"  [{i+1}] id={c.id:<4} logit={sc:+.4f} sig={_sigmoid(sc):.4f}  "
-            f"стр. {c.page_start}–{c.page_end}  {c.chunk_type:<9} «{c.heading[:48]}»{mark}"
+            f"{c.doc_filename or '—':<22} стр. {c.page_start}–{c.page_end}  "
+            f"{c.chunk_type:<9} «{c.heading[:48]}»{mark}"
         )
 
 

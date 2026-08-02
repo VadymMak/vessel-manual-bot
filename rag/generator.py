@@ -7,7 +7,8 @@
   - Числа — дословно с обеими единицами: 205 kPa (30 psi).
   - WARNING/NOTICE — в начало ответа, до шагов.
   - Шаги — полностью, в исходном порядке.
-  - Каждое утверждение — со ссылкой [SEBU7844-37, стр. 68].
+  - Каждое утверждение — со ссылкой вида [<публикация>, стр. 68], где
+    публикация берётся из заголовка фрагмента, а не из промпта.
   - Нет в документации → честный отказ + дилер Cat.
 """
 from __future__ import annotations
@@ -67,7 +68,9 @@ def looks_like_refusal(answer: str) -> bool:
 _SYSTEM: dict[str, str] = {
     "ru": """\
 Ты — технический ассистент по судовым двигателям Caterpillar 3500B/3500C.
-Отвечаешь ТОЛЬКО на основе предоставленных фрагментов документации (O&M Manual SEBU7844-37).
+Отвечаешь ТОЛЬКО на основе предоставленных фрагментов документации.
+Фрагменты бывают ИЗ РАЗНЫХ ПУБЛИКАЦИЙ. Публикация каждого фрагмента названа
+в его заголовке после слова SOURCE — это единственный источник ссылки.
 
 СТРОГИЕ ПРАВИЛА — нарушение любого из них недопустимо:
 
@@ -86,14 +89,23 @@ _SYSTEM: dict[str, str] = {
 4. Шаги процедуры передавай ПОЛНОСТЬЮ и В ИСХОДНОМ ПОРЯДКЕ.
    Не сокращай, не объединяй, не пропускай ни одного шага.
 
-5. Каждое числовое утверждение и номер детали сопровождай ссылкой:
-   [SEBU7844-37, стр. 68]
+5. Каждое числовое утверждение и номер детали сопровождай ссылкой.
+   Идентификатор публикации и страницу БЕРИ ИЗ ЗАГОЛОВКА ТОГО ФРАГМЕНТА,
+   откуда взят факт. Заголовок выглядит так:
+       --- Fragment 2 — SOURCE [<идентификатор>, p. <страница>] — <заголовок> ---
+   значит ссылка на этот факт: [<идентификатор>, стр. <страница>].
+   НЕ подставляй идентификатор по памяти и НЕ переноси его с другого фрагмента.
+
+   Если ответ собран из фрагментов РАЗНЫХ публикаций — ссылайся на каждую
+   отдельно, рядом с её фактом. НИКОГДА не объединяй страницы разных
+   публикаций в один диапазон: диапазон «стр. 104-118», собранный из двух
+   разных мануалов, — грубая ошибка, а не сокращение.
 
 6. ПРЕЖДЕ ЧЕМ ОТВЕЧАТЬ, мысленно найди во фрагментах всё, что относится
    к вопросу, — в тексте процедуры, в ячейках таблиц, в подписях к иллюстрациям.
    Если нашлось хоть что-то — отвечай этим. Отказ допустим, ТОЛЬКО если
    не нашлось ничего:
-   «Эта информация не содержится в O&M Manual (SEBU7844-37).
+   «Эта информация не содержится в O&M Manual.
     Обратитесь к дилеру Cat или к соответствующему Service Manual.»
    НЕ придумывай значений. Честный отказ лучше правдоподобной ошибки.
 
@@ -102,7 +114,9 @@ _SYSTEM: dict[str, str] = {
 """,
     "en": """\
 You are a technical assistant for Caterpillar 3500B/3500C marine engines.
-Answer ONLY based on the provided documentation fragments (O&M Manual SEBU7844-37).
+Answer ONLY based on the provided documentation fragments.
+Fragments may come FROM DIFFERENT PUBLICATIONS. The publication of each fragment
+is named in its header after the word SOURCE — that is the only source of a reference.
 
 STRICT RULES — any violation is unacceptable:
 
@@ -121,14 +135,23 @@ STRICT RULES — any violation is unacceptable:
 4. Transmit procedure steps COMPLETELY and IN ORIGINAL ORDER.
    Do not abbreviate, merge, or skip any step.
 
-5. Accompany every numerical claim and part number with a reference:
-   [SEBU7844-37, p. 68]
+5. Accompany every numerical claim and part number with a reference.
+   TAKE the publication id and the page FROM THE HEADER OF THE FRAGMENT the fact
+   came from. The header looks like this:
+       --- Fragment 2 — SOURCE [<id>, p. <page>] — <heading> ---
+   so the reference for that fact is: [<id>, p. <page>].
+   Do NOT supply the id from memory and do NOT carry it over from another fragment.
+
+   If the answer is assembled from fragments of DIFFERENT publications, reference
+   each one separately, next to its own fact. NEVER merge pages of different
+   publications into one range: a range "pp. 104-118" assembled from two
+   different manuals is a gross error, not an abbreviation.
 
 6. BEFORE ANSWERING, locate everything in the fragments that relates to the
    question — in procedure text, in table cells, in illustration captions.
    If anything at all was found, answer with it. Refusal is allowed ONLY if
    nothing was found:
-   "This information is not in the O&M Manual (SEBU7844-37).
+   "This information is not in the O&M Manual.
     Please contact your Cat dealer or refer to the applicable Service Manual."
    Do NOT fabricate values. An honest refusal is better than a plausible error.
 
@@ -137,12 +160,43 @@ STRICT RULES — any violation is unacceptable:
 }
 
 _FRAGMENT_TEMPLATE = """\
---- Fragment {n}: {heading} [{citation}] ---
+--- Fragment {n} — SOURCE [{doc}, {citation}] — {heading} ---
 {content}
 """
 
 
+def _publication_id(chunk: RetrievedChunk) -> str:
+    """
+    Идентификатор публикации для ссылки. ЕДИНСТВЕННОЕ МЕСТО, где он берётся.
+
+    Сейчас — имя файла без расширения. Для SEBU7844-37.pdf это и есть код
+    публикации, для C18-MarineGenSet.pdf — нет (настоящий код SEBU8118-06
+    стоит на титульной странице, но в БД поля publication_no пока нет).
+    Решение отложить поле — сознательное; когда оно появится, меняется
+    ровно эта функция, а формат фрагмента и промпт остаются как есть.
+
+    Пустое имя не подставляем: лучше явное «unknown source», по которому
+    видно, что источник потерян, чем правдоподобный чужой код.
+    """
+    name = (chunk.doc_filename or "").strip()
+    if not name:
+        return "unknown source"
+    return name[:-4] if name.lower().endswith(".pdf") else name
+
+
 def _build_context(chunks: list[RetrievedChunk]) -> str:
+    """
+    Контекст для модели. КАЖДЫЙ фрагмент несёт СВОЙ идентификатор публикации.
+
+    Раньше во фрагмент шли только страницы. При двух мануалах в базе это
+    давало неверные ссылки: модель не могла отличить фрагмент C18 от
+    фрагмента SEBU7844-37 и подставляла код публикации из системного
+    промпта, где он был константой. Замеренный результат — ответ, где шаги
+    из C18-MarineGenSet (стр. 117–118) подписаны «[SEBU7844-37, pp. 104-118]»,
+    хотя стр. 118 в SEBU7844-37 совсем о другом. Это нарушение правила 9
+    и опаснее отказа: отказ виден, а неверная ссылка выглядит правильным
+    ответом.
+    """
     parts = []
     for i, c in enumerate(chunks, start=1):
         citation = (
@@ -152,7 +206,8 @@ def _build_context(chunks: list[RetrievedChunk]) -> str:
         )
         parts.append(
             _FRAGMENT_TEMPLATE.format(
-                n=i, heading=c.heading, citation=citation, content=c.content,
+                n=i, doc=_publication_id(c), heading=c.heading,
+                citation=citation, content=c.content,
             )
         )
     return "\n".join(parts)
