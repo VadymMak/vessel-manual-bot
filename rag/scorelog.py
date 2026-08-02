@@ -11,7 +11,7 @@ JSONL-лог скоров реранкера — сырьё для будуще�
 а не на четыре точки.
 
 Формат — одна JSON-строка на запрос:
-  ts, source, backend, question, chunk_ids, top1_sigmoid, sigmoids,
+  ts, source, backend, system_fingerprint, question, chunk_ids, top1_sigmoid, sigmoids,
   top1_logit, logits, refused, answer_chars,
   applicability, control_modules, cm_ambiguous,
   grounding_ok, claims_checked, claims, unverified
@@ -35,6 +35,16 @@ JSONL-лог скоров реранкера — сырьё для будуще�
 расстояния до худшего положительного примера (gs006, +0.15). Строки с разными
 backend нельзя складывать в одну выборку, иначе откалиброванный порог окажется
 средним по двум шкалам и не подойдёт ни к одной. Фильтруйте по этому полю.
+
+Про system_fingerprint. temperature=0.0 стоит в вызове генерации с самого
+начала, и всё равно одна и та же конфигурация дала на gs008 14/15, 9/15 и 1/15
+в трёх последовательных замерах 2026-08-02 — при побитово том же контексте
+(поиск детерминирован, проверено тремя прогонами в двух процессах). Дрейф
+не наш, а провайдерский. Это поле — единственное, чем OpenAI обозначает смену
+сборки модели под нами. Без него «наш промпт стал хуже» и «под нами поменяли
+модель» неотличимы, и любая калибровка по накопленному логу будет считать
+среднее по нескольким разным моделям. Бывает пустым — пишем null, подставлять
+сюда нечего.
 
 Про две шкалы. Боевой реранкер вызывает compute_score(normalize=True) и отдаёт
 СИГМОИДЫ, а разделение, ради которого всё затевалось, измерялось в ЛОГИТАХ.
@@ -103,7 +113,9 @@ def log_query(
     а не транзакционный.
     """
     try:
-        from .generator import applicability_for, control_modules_in
+        from .generator import (
+            applicability_for, control_modules_in, last_system_fingerprint,
+        )
         from .verifier import verify
 
         logits = [_to_logit(s) for s in scores]
@@ -117,6 +129,9 @@ def log_query(
             "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             "source": source,
             "backend": _active_backend(),
+            # Сборка модели у OpenAI на момент запроса. Меняется без нашего
+            # участия и без предупреждения — см. «Про system_fingerprint».
+            "system_fingerprint": last_system_fingerprint(),
             "question": question,
             "chunk_ids": [c.id for c in chunks],
             # Из каких мануалов собран контекст, в порядке chunk_ids.

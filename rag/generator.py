@@ -13,6 +13,7 @@
 """
 from __future__ import annotations
 
+import contextvars
 import logging
 from collections.abc import AsyncGenerator
 
@@ -35,6 +36,30 @@ _REFUSAL_MARKERS = (
 
 def looks_like_refusal(answer: str) -> bool:
     return any(m in answer for m in _REFUSAL_MARKERS)
+
+
+# ─── Отпечаток бэкенда OpenAI ────────────────────────────────────────────────
+# temperature=0.0 стоит здесь с самого начала, и всё равно одна и та же
+# конфигурация дала на gs008 14/15, 9/15 и 1/15 в трёх последовательных
+# замерах при побитово том же контексте (поиск детерминирован, проверено).
+# То есть дрейф не наш, а провайдерский: под нами меняют сборку модели.
+# system_fingerprint — единственное, чем OpenAI это обозначает. Пишем его
+# в скор-лог на каждый запрос, чтобы через месяц эксплуатации можно было
+# сопоставить скачки качества со сменой бэкенда, а не гадать, что «промпт
+# стал хуже». Стоит одну строку; без неё замеры остаются слепыми.
+#
+# ContextVar, а не глобал: под несколькими одновременными запросами
+# (этап 3, FastAPI + SSE) глобал отдал бы чужой отпечаток. Значение,
+# выставленное внутри асинхронного генератора, видно вызывающему —
+# отдельный контекст у генераторов в CPython не заводится.
+_SYSTEM_FINGERPRINT: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "openai_system_fingerprint", default=None
+)
+
+
+def last_system_fingerprint() -> str | None:
+    """Отпечаток сборки модели у последнего generate() в этом контексте."""
+    return _SYSTEM_FINGERPRINT.get()
 
 # ПОРЯДОК ВНУТРИ ПРАВИЛА 6 — РЕЗУЛЬТАТ ИЗМЕРЕНИЯ, НЕ СТИЛИСТИКА.
 # Прежняя формулировка («если ответа во фрагментах НЕТ — откажись») заставляла
@@ -370,7 +395,18 @@ async def generate(
     head = ""
     decided = False
 
+    # Сбрасываем перед потоком: если запрос упадёт, лучше пустое поле,
+    # чем отпечаток от прошлого запроса, приписанный этому.
+    _SYSTEM_FINGERPRINT.set(None)
+
     async for event in stream:
+        # Отпечаток приходит в каждом чанке потока; берём первый непустой.
+        # У gpt-4o-mini поле бывает пустым — тогда так и пишем null,
+        # подставлять сюда нечего.
+        if _SYSTEM_FINGERPRINT.get() is None:
+            fp = getattr(event, "system_fingerprint", None)
+            if fp:
+                _SYSTEM_FINGERPRINT.set(fp)
         delta = event.choices[0].delta.content
         if not delta:
             continue
