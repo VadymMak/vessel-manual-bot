@@ -10,12 +10,15 @@
     заголовку H1. Это надёжнее эвристик по размеру шрифта.
   * Плашка WARNING — ЭТО ИЗОБРАЖЕНИЕ. Слова "WARNING" в текстовом слое НЕТ.
     Детектируем по геометрии баннера (≈234×26pt), текст предупреждения —
-    идущие следом блоки, целиком набранные Arial-BoldMT.
+    идущие следом блоки, целиком набранные жирным (флаг, не имя шрифта).
   * NOTICE — текстовый блок, обрамлённый линиями, первая строка "NOTICE".
   * Номер шага процедуры набран жирным ("8."), тело шага — обычным.
 
-Иерархия размеров шрифта:
-    15.9pt          → H1  (заголовок процедуры)
+Иерархия размеров шрифта НЕ ЗАШИТА: она определяется из документа функцией
+detect_heading_profile() и печатается при make ingest. У SEBU7844-37 и C18
+она такая (RENR того же семейства даёт другие числа — в этом и была причина):
+    17.9pt          → уровень секции ("Safety Section"), тоже классифицируется h1
+    15.9pt          → H1  (заголовок процедуры, подтверждён меткой icode)
     13.9pt bold     → H2  (подраздел, напр. "Engines Equipped with ADEM II")
     12.0pt bold     → H3
     10.0pt          → основной текст
@@ -37,11 +40,138 @@ HEADER_CUTOFF = 60.0   # выше — колонтитул с номером с�
 FOOTER_CUTOFF = 750.0  # ниже — нижний колонтитул
 
 # ─── Размеры шрифта ──────────────────────────────────────────────────────────
-SIZE_H1 = 15.0
-SIZE_H2 = 13.0
-SIZE_H3 = 11.5
+# Константами БОЛЬШЕ НЕ ЗАДАЮТСЯ — профиль определяется из самого документа,
+# см. detect_heading_profile(). Три документа семейства дают три разных набора:
+#
+#   SEBU7844-37, C18   секция 17.9   H1 15.9   H2 13.9   H3 12.0   тело 10.0
+#   RENR5078-05        (по замеру)   H1 17.9   H2 15.8   H3 13.9
+#
+# Допуск: размер относится к уровню, если он не меньше уровня минус TOL.
+# 0.5 подобран не на глаз — он воспроизводит прежние пороги 15.0 / 13.0 / 11.5
+# на обоих проиндексированных мануалах побайтово, при том что 11.0pt
+# (5-6% символов, почти не жирный) в H3 по-прежнему не попадает.
+SIZE_TOL = 0.5
 SIZE_BODY = 9.5
-BOLD_FONT = "Arial-BoldMT"
+
+# Жирность — ПО ФЛАГУ, а не по имени шрифта. Имя меняется от документа
+# к документу (Arial-BoldMT против Arial,Bold), бит 2**4 в span["flags"] нет.
+BOLD_FLAG = 2 ** 4
+
+# Метка процедуры Caterpillar. Блок, начинающийся с неё, ЕСТЬ заголовок H1
+# по построению документа — это структурный якорь, а не эвристика по размеру.
+RE_LEADING_ICODE = re.compile(r"^i\d{8}(\s|$)")
+
+
+@dataclass(frozen=True)
+class HeadingProfile:
+    """Размеры уровней заголовков КОНКРЕТНОГО документа."""
+    body: float
+    h1: float
+    h2: float
+    h3: float
+    h1_anchors: int          # сколько блоков с меткой icode подтвердили H1
+    h1_agreement: float      # доля этих блоков, согласившихся на один размер
+
+    def kind_of(self, size: float, is_bold: bool) -> str | None:
+        """Уровень заголовка по размеру, либо None."""
+        if size >= self.h1 - SIZE_TOL:
+            return "h1"
+        if is_bold and size >= self.h2 - SIZE_TOL:
+            return "h2"
+        if is_bold and size >= self.h3 - SIZE_TOL:
+            return "h3"
+        return None
+
+    @property
+    def h3_cutoff(self) -> float:
+        """Ниже этого размера жирный блок заголовком уже не считается."""
+        return self.h3 - SIZE_TOL
+
+    def describe(self) -> str:
+        return (f"профиль заголовков: тело {self.body}  H1 {self.h1}  "
+                f"H2 {self.h2}  H3 {self.h3}   "
+                f"(H1 подтверждён {self.h1_anchors} метками icode, "
+                f"согласие {self.h1_agreement:.0%})")
+
+
+def detect_heading_profile(doc: fitz.Document) -> HeadingProfile:
+    """
+    Определить размеры уровней заголовков из самого документа.
+
+    ПОЧЕМУ НЕ ПРОСТО ГИСТОГРАММА «доминирующий размер — тело, три следующих
+    сверху — H1/H2/H3». Потому что уровней ЧЕТЫРЕ, а не три: 17.9pt несёт
+    «Safety Section» и «Product Information Section» на 17-20 страницах
+    обоих мануалов. Правило «три сверху» дало бы H1=17.9, H2=15.9, H3=13.9
+    и сдвинуло бы всю иерархию на уровень — 12.0pt перестал бы быть
+    заголовком вовсе. Проверено на данных, не предположение.
+
+    ПОЭТОМУ H1 БЕРЁТСЯ ОТ СТРУКТУРНОГО ЯКОРЯ. Каждая процедура Caterpillar
+    помечена ID модуля вида i08246330, и метка стоит в одном блоке
+    с заголовком. Размер таких блоков и есть H1 — по построению документа,
+    а не по частоте. Замер: SEBU7844-37 — 112 меток, согласие 100%;
+    C18 — 139 меток, согласие 100%.
+
+    H2 и H3 — два ближайших размера СТРОГО между телом и H1, у которых
+    большинство символов жирные. У обоих мануалов это 13.9 и 12.0; размер
+    11.0pt (5-6% символов) отсеивается тем, что жирного в нём 0.5%.
+
+    Размер выше H1 остаётся уровнем секции и классифицируется как h1 —
+    ровно так же, как это делали прежние константы.
+    """
+    from collections import Counter
+
+    anchors: Counter[float] = Counter()
+    all_chars: Counter[float] = Counter()
+    bold_chars: Counter[float] = Counter()
+
+    for page in doc:
+        for block in page.get_text("dict")["blocks"]:
+            if "lines" not in block or not _in_body(block["bbox"]):
+                continue
+            if RE_LEADING_ICODE.match(_block_text(block)):
+                anchors[round(_block_max_size(block), 1)] += 1
+            for line in block["lines"]:
+                for span in line["spans"]:
+                    text = span["text"].strip()
+                    if not text:
+                        continue
+                    size = round(span["size"], 1)
+                    all_chars[size] += len(text)
+                    if span["flags"] & BOLD_FLAG:
+                        bold_chars[size] += len(text)
+
+    if not all_chars:
+        raise ValueError("в документе нет текстового слоя")
+
+    body = all_chars.most_common(1)[0][0]
+
+    if anchors:
+        h1, hits = anchors.most_common(1)[0]
+        n_anchors, agreement = sum(anchors.values()), hits / sum(anchors.values())
+    else:
+        # Документ без меток процедур. Падать нельзя, но и молчать нельзя:
+        # H1 берётся как крупнейший жирный размер над телом, а нулевое
+        # число якорей в логе показывает, что уровень не подтверждён.
+        candidates = [s for s in all_chars
+                      if s > body and bold_chars.get(s, 0) > all_chars[s] / 2]
+        if not candidates:
+            raise ValueError("не найдено ни одного жирного размера крупнее тела")
+        h1, n_anchors, agreement = max(candidates), 0, 0.0
+
+    # H2 и H3 — два ближайших жирных уровня строго между телом и H1.
+    between = sorted(
+        (s for s in all_chars
+         if body < s < h1 and bold_chars.get(s, 0) > all_chars[s] / 2),
+        reverse=True,
+    )
+    if len(between) < 2:
+        raise ValueError(
+            f"между телом {body} и H1 {h1} найдено уровней: {between} — "
+            "ожидалось не меньше двух (H2 и H3)"
+        )
+    h2, h3 = between[0], between[1]
+    return HeadingProfile(body=body, h1=h1, h2=h2, h3=h3,
+                          h1_anchors=n_anchors, h1_agreement=agreement)
 
 # ─── Геометрия баннера WARNING ───────────────────────────────────────────────
 WARN_BANNER_W = (200.0, 260.0)
@@ -107,8 +237,15 @@ def _block_max_size(block: dict) -> float:
 
 
 def _is_all_bold(block: dict) -> bool:
-    fonts = {s["font"] for line in block["lines"] for s in line["spans"] if s["text"].strip()}
-    return bool(fonts) and fonts == {BOLD_FONT}
+    """Все непустые спаны блока набраны жирным.
+
+    Проверяется ФЛАГ, а не имя шрифта: SEBU7844-37 и C18 используют
+    Arial-BoldMT, RENR — Arial,Bold, и список имён пришлось бы вести вручную.
+    Бит 2**4 одинаков у всех. На обоих проиндексированных мануалах правило
+    по флагу совпадает с прежним правилом по имени полностью.
+    """
+    spans = [s for line in block["lines"] for s in line["spans"] if s["text"].strip()]
+    return bool(spans) and all(s["flags"] & BOLD_FLAG for s in spans)
 
 
 def _column_of(bbox: tuple[float, ...]) -> Literal["left", "right", "full"]:
@@ -275,7 +412,7 @@ def _normalize_heading(text: str) -> str:
 
 # ─── Классификация одного блока ──────────────────────────────────────────────
 
-def _classify(block: dict, text: str) -> ElementKind:
+def _classify(block: dict, text: str, profile: HeadingProfile) -> ElementKind:
     size = _block_max_size(block)
     first_span = next(
         (s for line in block["lines"] for s in line["spans"] if s["text"].strip()),
@@ -290,16 +427,14 @@ def _classify(block: dict, text: str) -> ElementKind:
         return "table"
     if RE_ILLUSTRATION.match(text):
         return "illustration"
-    if size >= SIZE_H1:
-        return "h1"
-    if size >= SIZE_H2 and _is_all_bold(block):
-        return "h2"
-    if size >= SIZE_H3 and _is_all_bold(block):
-        return "h3"
+    level = profile.kind_of(size, _is_all_bold(block))
+    if level:
+        return level  # type: ignore[return-value]
     if text.startswith("NOTICE"):
         return "notice"
     # Шаг процедуры: номер набран жирным
-    if first_span and first_span["font"] == BOLD_FONT and RE_STEP.match(first_span["text"].strip() + " x"):
+    if (first_span and first_span["flags"] & BOLD_FLAG
+            and RE_STEP.match(first_span["text"].strip() + " x")):
         return "step"
     if RE_STEP.match(text):
         return "step"
@@ -308,7 +443,8 @@ def _classify(block: dict, text: str) -> ElementKind:
 
 # ─── Извлечение страницы ─────────────────────────────────────────────────────
 
-def extract_page(page: fitz.Page, page_no: int) -> list[Element]:
+def extract_page(page: fitz.Page, page_no: int,
+                 profile: HeadingProfile) -> list[Element]:
     """Извлечь элементы одной страницы в корректном порядке чтения.
 
     Порядок: сначала полноширинные элементы, затем левая колонка сверху вниз,
@@ -351,12 +487,12 @@ def extract_page(page: fitz.Page, page_no: int) -> list[Element]:
                 warning_open = True
 
             if warning_open:
-                if _is_all_bold(b) and _block_max_size(b) < SIZE_H3:
+                if _is_all_bold(b) and _block_max_size(b) < profile.h3_cutoff:
                     elements.append(Element("warning", text, page_no, col, y_top))
                     continue
                 warning_open = False  # текст перестал быть жирным — предупреждение кончилось
 
-            kind = _classify(b, text)
+            kind = _classify(b, text, profile)
             meta: dict = {}
 
             # Текст внутри нарисованной сетки принадлежит таблице.
@@ -411,7 +547,8 @@ def extract_page(page: fitz.Page, page_no: int) -> list[Element]:
 def extract_document(pdf_path: str, first_page: int = 1, last_page: int | None = None) -> Iterator[Element]:
     """Извлечь элементы всего документа в порядке чтения."""
     doc = fitz.open(pdf_path)
+    profile = detect_heading_profile(doc)
     last = last_page or doc.page_count
     for pno in range(first_page - 1, last):
-        yield from extract_page(doc[pno], pno + 1)
+        yield from extract_page(doc[pno], pno + 1, profile)
     doc.close()

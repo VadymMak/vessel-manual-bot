@@ -17,7 +17,10 @@ def main() -> int:
     ap.add_argument("--last", type=int, default=None)
     args = ap.parse_args()
 
-    chunks = ingest(args.pdf, args.first, args.last)
+    # Профиль печатается ДО остальной сводки: если он определился неверно,
+    # все числа ниже недостоверны, и человек должен увидеть это первым.
+    chunks = ingest(args.pdf, args.first, args.last,
+                    on_profile=lambda p: print(p.describe()))
     document = parse_title_page(args.pdf)
     to_json(chunks, args.out, document)
 

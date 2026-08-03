@@ -15,7 +15,9 @@ import sys
 import fitz
 
 sys.path.insert(0, ".")
-from ingestion.extractor import _in_body, _is_warning_banner, extract_page  # noqa: E402
+from ingestion.extractor import (  # noqa: E402
+    _in_body, _is_warning_banner, detect_heading_profile, extract_page,
+)
 from ingestion.pipeline import ingest  # noqa: E402
 
 # Путь к проверяемому PDF: аргумент командной строки, переменная окружения
@@ -91,9 +93,10 @@ def check_tables_intact(_chunks) -> list[str]:
     from ingestion.chunker import _split_long, group_by_procedure  # noqa: PLC0415
 
     doc = fitz.open(PDF)
+    profile = detect_heading_profile(doc)
     elements = []
     for pno in range(doc.page_count):
-        elements.extend(extract_page(doc[pno], pno + 1))
+        elements.extend(extract_page(doc[pno], pno + 1, profile))
     doc.close()
 
     problems = []

@@ -10,7 +10,7 @@ from pathlib import Path
 import fitz
 
 from .chunker import Chunk, build_chunks
-from .extractor import HEADER_CUTOFF, extract_page
+from .extractor import HEADER_CUTOFF, detect_heading_profile, extract_page
 
 RE_SECTION = re.compile(r"\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*\s+Section)\b")
 
@@ -101,13 +101,22 @@ def page_sections(doc: fitz.Document) -> dict[int, str]:
     return sections
 
 
-def ingest(pdf_path: str | Path, first_page: int = 1, last_page: int | None = None) -> list[Chunk]:
+def ingest(pdf_path: str | Path, first_page: int = 1, last_page: int | None = None,
+           on_profile=None) -> list[Chunk]:
     doc = fitz.open(pdf_path)
     last = last_page or doc.page_count
 
+    # Профиль заголовков определяется ПО ВСЕМУ документу, а не по срезу
+    # first/last: при разборе одной статьи меток icode может не оказаться
+    # вовсе, и уровни поехали бы. Печатается вызывающим — человек обязан
+    # сверить их с документом, автоматической проверки здесь быть не может.
+    profile = detect_heading_profile(doc)
+    if on_profile:
+        on_profile(profile)
+
     elements = []
     for pno in range(first_page - 1, last):
-        elements.extend(extract_page(doc[pno], pno + 1))
+        elements.extend(extract_page(doc[pno], pno + 1, profile))
 
     sections = page_sections(doc)
     doc.close()
