@@ -20,3 +20,7 @@ score_log.jsonl
 # Выгруженные ONNX-модели реранкера: 2.8 ГБ, воспроизводятся
 # scripts/export_reranker_onnx.sh. В git им делать нечего.
 models/
+
+# Выгрузка рангов для офлайн-перебора слияния: артефакт прогона,
+# воспроизводится python3 -m scripts.dump_ranks
+eval_ranks.json
