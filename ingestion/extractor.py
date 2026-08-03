@@ -447,8 +447,25 @@ def extract_page(page: fitz.Page, page_no: int,
                  profile: HeadingProfile) -> list[Element]:
     """Извлечь элементы одной страницы в корректном порядке чтения.
 
-    Порядок: сначала полноширинные элементы, затем левая колонка сверху вниз,
-    затем правая. Это восстанавливает логику чтения двухколоночной вёрстки.
+    ПОРЯДОК — ПОЛОСАМИ, а не «сначала все полноширинные, потом колонки».
+    Полноширинные элементы делят страницу на горизонтальные полосы; внутри
+    полосы читается левая колонка сверху вниз, затем правая.
+
+    Почему не «сначала full, потом left, потом right», как было. Такой порядок
+    вырывает полноширинный элемент из места, где он стоит, и уносит в начало
+    страницы. На RENR5078-05 стр. 46 это привело к подмене, а не к потере:
+    строки Table 6 оказались в предыдущей процедуре «Fuel Injector Adjustment»,
+    а подпись [Table 6] осталась при строках Table 7. Чанк предъявлял номера
+    цилиндров ОБРАТНОГО вращения под подписью СТАНДАРТНОГО. Потеря видна,
+    подмена нет.
+
+    Почему не «сортировать всё по y». Это сломало бы нормальные двухколоночные
+    страницы, где текст течёт из низа левой колонки в верх правой: сортировка
+    по y перемешала бы шаги 1-2 с 8-10 — ровно тот баг, ради которого
+    колоночное чтение и вводилось (правило 2 CLAUDE.md).
+
+    Полосы сохраняют колоночный поток там, где он есть, и прерывают его
+    ровно там, где страница действительно полноширинная.
     """
     raw = page.get_text("dict")["blocks"]
     blocks = [b for b in raw if _in_body(b["bbox"])]
@@ -469,77 +486,96 @@ def extract_page(page: fitz.Page, page_no: int,
     for col in by_column:
         by_column[col].sort(key=lambda b: b["bbox"][1])
 
+    # ─── Порядок чтения полосами ─────────────────────────────────────────────
+    # Границы полос — верхние края полноширинных блоков. Колоночный блок
+    # попадает в ту полосу, в которую попадает его верхний край.
+    ordered: list[tuple[str, dict]] = []
+    prev_y = float("-inf")
+    for full_block in by_column["full"]:
+        y0 = full_block["bbox"][1]
+        for col in ("left", "right"):
+            ordered += [(col, b) for b in by_column[col]
+                        if prev_y <= b["bbox"][1] < y0]
+        ordered.append(("full", full_block))
+        prev_y = y0
+    for col in ("left", "right"):
+        ordered += [(col, b) for b in by_column[col] if b["bbox"][1] >= prev_y]
+
     elements: list[Element] = []
     emitted_tables: set[int] = set()
-    for col in ("full", "left", "right"):
-        col_blocks = by_column[col]
-        # Пометить блоки, идущие сразу под баннером WARNING
-        warning_open = False
-        for b in col_blocks:
-            text = _block_text(b)
-            y_top = b["bbox"][1]
+    # warning_open жил в области видимости одной колонки. Теперь колонка
+    # меняется внутри страницы, и состояние обязано сбрасываться на каждой
+    # смене — иначе жирный текст из правой колонки прилипнет к баннеру левой.
+    prev_col: str | None = None
+    warning_open = False
+    for col, b in ordered:
+        if col != prev_col:
+            warning_open = False
+            prev_col = col
+        text = _block_text(b)
+        y_top = b["bbox"][1]
 
-            # Начало блока WARNING: блок расположен сразу под баннером
-            starts_warning = any(
-                0 <= y_top - banner_bottom < 12 for banner_bottom in banner_ys[col]
-            )
-            if starts_warning:
-                warning_open = True
+        # Начало блока WARNING: блок расположен сразу под баннером
+        starts_warning = any(
+            0 <= y_top - banner_bottom < 12 for banner_bottom in banner_ys[col]
+        )
+        if starts_warning:
+            warning_open = True
 
-            if warning_open:
-                if _is_all_bold(b) and _block_max_size(b) < profile.h3_cutoff:
-                    elements.append(Element("warning", text, page_no, col, y_top))
+        if warning_open:
+            if _is_all_bold(b) and _block_max_size(b) < profile.h3_cutoff:
+                elements.append(Element("warning", text, page_no, col, y_top))
+                continue
+            warning_open = False  # текст перестал быть жирным — предупреждение кончилось
+
+        kind = _classify(b, text, profile)
+        meta: dict = {}
+
+        # Текст внутри нарисованной сетки принадлежит таблице.
+        # Таблицу разбираем ЦЕЛИКОМ по ячейкам при первом попавшемся
+        # внутреннем блоке, остальные блоки этой области пропускаем:
+        # плоская строка «1U-5490 Hydrosolv 4165 19 L» без границ колонок
+        # неоднозначна и стабильно ломает вопросы про номера деталей.
+        block_rect = fitz.Rect(b["bbox"])
+        if kind in ("para", "step"):
+            inside = None
+            for idx, region in enumerate(table_regions):
+                if region.intersects(block_rect) and block_rect.get_area():
+                    overlap = (region & block_rect).get_area() / block_rect.get_area()
+                    if overlap > 0.6:
+                        inside = idx
+                        break
+            if inside is not None:
+                if inside in emitted_tables:
                     continue
-                warning_open = False  # текст перестал быть жирным — предупреждение кончилось
+                emitted_tables.add(inside)
+                rows = extract_table_rows(page, table_regions[inside])
+                if rows:
+                    elements.append(
+                        Element("table", "", page_no, col, y_top, {"rows": rows})
+                    )
+                    continue
+                kind = "table_row"  # сетка не разобралась — старое поведение
 
-            kind = _classify(b, text, profile)
-            meta: dict = {}
+        if kind in ("h1", "h2", "h3"):
+            text, icode = _strip_icode(text)
+            text = _normalize_heading(text)
+            if icode:
+                elements.append(Element("icode", icode, page_no, col, y_top))
 
-            # Текст внутри нарисованной сетки принадлежит таблице.
-            # Таблицу разбираем ЦЕЛИКОМ по ячейкам при первом попавшемся
-            # внутреннем блоке, остальные блоки этой области пропускаем:
-            # плоская строка «1U-5490 Hydrosolv 4165 19 L» без границ колонок
-            # неоднозначна и стабильно ломает вопросы про номера деталей.
-            block_rect = fitz.Rect(b["bbox"])
-            if kind in ("para", "step"):
-                inside = None
-                for idx, region in enumerate(table_regions):
-                    if region.intersects(block_rect) and block_rect.get_area():
-                        overlap = (region & block_rect).get_area() / block_rect.get_area()
-                        if overlap > 0.6:
-                            inside = idx
-                            break
-                if inside is not None:
-                    if inside in emitted_tables:
-                        continue
-                    emitted_tables.add(inside)
-                    rows = extract_table_rows(page, table_regions[inside])
-                    if rows:
-                        elements.append(
-                            Element("table", "", page_no, col, y_top, {"rows": rows})
-                        )
-                        continue
-                    kind = "table_row"  # сетка не разобралась — старое поведение
+        if kind == "smcs":
+            m = RE_SMCS.search(text)
+            if m:
+                meta["codes"] = [c.strip() for c in re.split(r"[;,]", m.group(1)) if c.strip()]
+        if kind == "illustration":
+            gid = RE_GRAPHIC_ID.search(text)
+            if gid:
+                meta["graphic_id"] = gid.group(1)
+        parts = RE_PART_NUMBER.findall(text)
+        if parts:
+            meta["part_numbers"] = sorted(set(parts))
 
-            if kind in ("h1", "h2", "h3"):
-                text, icode = _strip_icode(text)
-                text = _normalize_heading(text)
-                if icode:
-                    elements.append(Element("icode", icode, page_no, col, y_top))
-
-            if kind == "smcs":
-                m = RE_SMCS.search(text)
-                if m:
-                    meta["codes"] = [c.strip() for c in re.split(r"[;,]", m.group(1)) if c.strip()]
-            if kind == "illustration":
-                gid = RE_GRAPHIC_ID.search(text)
-                if gid:
-                    meta["graphic_id"] = gid.group(1)
-            parts = RE_PART_NUMBER.findall(text)
-            if parts:
-                meta["part_numbers"] = sorted(set(parts))
-
-            elements.append(Element(kind, text, page_no, col, y_top, meta))
+        elements.append(Element(kind, text, page_no, col, y_top, meta))
 
     return elements
 
