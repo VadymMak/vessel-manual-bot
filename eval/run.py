@@ -214,6 +214,21 @@ def main(category: str | None, ids: str | None, no_rerank: bool,
         id_set = {s.strip() for s in ids.split(",")}
         items = [i for i in items if i["id"] in id_set]
 
+    # Вопрос без единого ожидания генеративной оценке не подлежит: проверять
+    # нечего, и он прошёл бы даром, завысив счёт. Такие вопросы существуют
+    # намеренно — категория ru_no_anchor размечена только target_chunk и
+    # мерится через make eval-retrieval. Пропускать их МОЛЧА нельзя,
+    # иначе «32/32» и «42/42» будут выглядеть одинаково убедительно.
+    unscorable = [i for i in items
+                  if not i.get("expected_contains") and not i.get("must_not_contain")]
+    if unscorable:
+        items = [i for i in items if i not in unscorable]
+        click.echo(
+            f"Пропущено без ожиданий (только для make eval-retrieval): "
+            f"{len(unscorable)} — {', '.join(i['id'] for i in unscorable)}",
+            err=True,
+        )
+
     if not items:
         click.echo("Нет вопросов после фильтрации.", err=True)
         raise SystemExit(1)
