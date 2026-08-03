@@ -53,7 +53,7 @@ LOAD_ENV = set -a; . ./.env; set +a;
 query load eval eval-retrieval: export OMP_NUM_THREADS=8
 query load eval eval-retrieval: export MKL_NUM_THREADS=8
 
-.PHONY: check-py install ingest verify migrate load query eval eval-retrieval psql dev clean check-env
+.PHONY: check-py install ingest verify migrate load query eval eval-retrieval families psql dev clean check-env
 
 # ─── Этап 1: ingestion ───────────────────────────────────────────────────────
 install: 
@@ -126,6 +126,18 @@ eval: check-env
 eval-retrieval: check-env
 	$(PYTHON) -m eval.retrieval $(if $(CAT),--category $(CAT),) \
 		$(if $(M),--models "$(M)",) $(if $(IDS),--ids $(IDS),)
+
+# ─── Таблица семейств моделей ────────────────────────────────────────────────
+# Выводится из корпуса, константой нигде не записана. Смотреть после КАЖДОЙ
+# индексации нового мануала и сверять с его титульной страницей: строка
+# «3500B → 3508B, 3512B, 3516B» обязана совпадать с тем, что напечатано
+# над серийными префиксами. Ненулевой код возврата — семейство, не покрывающее
+# ни одной модели своего документа, то есть недостижимые чанки.
+#
+# make families              — вся таблица
+# make families M="3512B"    — что раскрытие даёт этому запросу
+families: check-env
+	$(PYTHON) -m scripts.family_table $(if $(M),--models "$(M)",)
 
 dev:
 	uvicorn rag.api:app --reload --host 0.0.0.0 --port 8001
