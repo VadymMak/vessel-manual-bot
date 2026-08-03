@@ -25,20 +25,16 @@ import sys
 import click
 import psycopg
 
-# Общий пролог: какие токены являются именами семейств и что они покрывают.
-_FAMILIES = """
-WITH fam AS (
-    SELECT DISTINCT unnest(c.applicable_models) AS token, c.doc_id
-    FROM chunks c
-), families AS (
-    SELECT f.token, f.doc_id
-    FROM fam f
-    JOIN documents d ON d.id = f.doc_id
-    WHERE NOT (f.token = ANY(d.applicable_models))
-)
-"""
+# Определение семейств берётся ИЗ БОЕВОГО КОДА, не дублируется здесь.
+# Дубликат SQL уже один раз разошёлся с рабочим: предохранитель цикла жил
+# в rag/retriever.py, а make families печатал таблицу по своей копии и
+# ложных строк не показывал.
+def _families_sql(body: str) -> str:
+    from rag.retriever import _FAMILY_DEF
+    return "WITH " + _FAMILY_DEF + body
 
-_TABLE_SQL = _FAMILIES + """
+
+_TABLE_BODY = """
 SELECT d.filename,
        fa.token,
        regexp_replace(fa.token, '^[0-9]+', '') AS generation,
@@ -52,10 +48,26 @@ GROUP BY 1, 2, 3
 ORDER BY 1, 2
 """
 
+# Кандидаты, отброшенные предохранителем цикла. Печатаются ВСЕГДА, когда
+# не пусты: молча проглоченное срабатывание предохранителя ничем не лучше
+# отсутствующего предохранителя.
+_DROPPED_BODY = """
+SELECT d.filename, fc.token, fc.covers
+FROM family_cover fc
+JOIN documents d ON d.id = fc.doc_id
+WHERE EXISTS (
+    SELECT 1 FROM family_cover other
+    WHERE other.token <> fc.token
+      AND fc.token = ANY(other.covers)
+      AND (other.n > fc.n OR (other.n = fc.n AND other.token < fc.token))
+)
+ORDER BY 1, 2
+"""
+
 # Семейный токен, не покрывающий ни одной модели своего документа: либо
 # опечатка в разметке, либо поколение, которого в документе нет. Такой чанк
 # недостижим ни для одного запроса — это дефект, а не настройка.
-_ORPHAN_SQL = _FAMILIES + """
+_ORPHAN_BODY = """
 SELECT d.filename, fa.token, count(DISTINCT c.id)
 FROM families fa
 JOIN documents d ON d.id = fa.doc_id
@@ -86,7 +98,7 @@ async def _run(models: list[str] | None) -> int:
     expand_sql = _FAMILY_CTE + "SELECT models FROM asked"
     async with await psycopg.AsyncConnection.connect(settings.db_dsn) as conn:
         async with conn.cursor() as cur:
-            await cur.execute(_TABLE_SQL)
+            await cur.execute(_families_sql(_TABLE_BODY))
             rows = await cur.fetchall()
             click.echo("\nТАБЛИЦА СЕМЕЙСТВ (выведена из корпуса, не задана константой)")
             click.echo("-" * 78)
@@ -96,7 +108,7 @@ async def _run(models: list[str] | None) -> int:
                 click.echo(f"  {filename:<24}{token:<10}поколение {generation:<6}"
                            f"→ {', '.join(covers)}")
 
-            await cur.execute(_ORPHAN_SQL)
+            await cur.execute(_families_sql(_ORPHAN_BODY))
             orphans = await cur.fetchall()
             if orphans:
                 click.secho("\nСЕМЕЙСТВА БЕЗ ЕДИНОЙ МОДЕЛИ В СВОЁМ ДОКУМЕНТЕ", fg="red")
@@ -104,6 +116,16 @@ async def _run(models: list[str] | None) -> int:
                             "запроса — это дефект разметки", fg="red")
                 for filename, token, n in orphans:
                     click.secho(f"  {filename:<24}{token:<10}{n} чанк(ов)", fg="red")
+
+            await cur.execute(_families_sql(_DROPPED_BODY))
+            dropped = await cur.fetchall()
+            if dropped:
+                click.secho("\nОТБРОШЕНО ПРЕДОХРАНИТЕЛЕМ ЦИКЛА", fg="yellow")
+                click.secho("токен объявлен семейством, но сам входит в покрытие "
+                            "другого семейства — это цикл", fg="yellow")
+                for filename, token, covers in dropped:
+                    click.secho(f"  {filename:<24}{token:<10}покрывал бы "
+                                f"{', '.join(covers)}", fg="yellow")
 
             if not models:
                 click.echo()

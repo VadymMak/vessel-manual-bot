@@ -49,16 +49,58 @@ _embedder = Embedder()
 # ПОКОЛЕНИЕ ОБЯЗАНО СОВПАДАТЬ. {3500C} под запросом 3512B не проходит:
 # Fluid Recommendations стр. 56–63 размечен {3500C} и B-двигателю не применим.
 # Цена ошибки здесь та же, что у ADEM II против ADEM III.
-_FAMILY_CTE = """
-WITH fam AS (
+_FAMILY_DEF = """
+fam AS (
     SELECT DISTINCT unnest(c.applicable_models) AS token, c.doc_id
     FROM chunks c
-), families AS (
+), raw_families AS (
     SELECT f.token, f.doc_id
     FROM fam f
     JOIN documents d ON d.id = f.doc_id
     WHERE NOT (f.token = ANY(d.applicable_models))
-), asked AS MATERIALIZED (
+), family_cover AS (
+    -- Сколько моделей своего документа покрывает каждый кандидат в семейства.
+    SELECT rf.token, rf.doc_id, array_agg(DISTINCT m) AS covers, count(DISTINCT m) AS n
+    FROM raw_families rf
+    JOIN documents d ON d.id = rf.doc_id
+    CROSS JOIN LATERAL unnest(d.applicable_models) AS m
+    WHERE regexp_replace(m, '^[0-9]+', '') = regexp_replace(rf.token, '^[0-9]+', '')
+    GROUP BY 1, 2
+), families AS (
+    -- ПРЕДОХРАНИТЕЛЬ: отношение семейств обязано быть ациклично.
+    --
+    -- Правило «семейный токен — тот, которого нет в списке моделей своего
+    -- документа» ИНВЕРТИРУЕТСЯ, когда список самого документа состоит
+    -- из имён семейств. У RENR5078-05 титул даёт {3500B, 3500C} — модели
+    -- в скобках там «(Engine)», а не «(3512B)», — и тогда конкретный 3512B
+    -- из разметки чанка отсутствует в списке документа и объявляется
+    -- «семейством», покрывающим 3500B. Возникает цикл:
+    --     3500B → {3508B, 3512B, 3516B}      (правильно, из SEBU7844-37)
+    --     3512B → {3500B}                     (ложно, из RENR5078-05)
+    -- и через него — обратное раскрытие, которое реализовывать запрещено:
+    -- запрос 3500B начинал бы подхватывать 3508B/3512B/3516B.
+    --
+    -- Отбрасывается та сторона цикла, которая покрывает МЕНЬШЕ моделей:
+    -- 3500B покрывает три, 3512B одну. При равенстве — лексикографически,
+    -- чтобы результат не зависел от порядка строк.
+    --
+    -- ВРЕМЕННАЯ МЕРА. Настоящее решение — собирать applicable_models
+    -- документа соединением по серийному префиксу с документом, который
+    -- объявляет модели явно. Тогда у RENR будут конкретные модели,
+    -- ложные кандидаты исчезнут сами и предохранитель станет no-op.
+    SELECT fc.token, fc.doc_id
+    FROM family_cover fc
+    WHERE NOT EXISTS (
+        SELECT 1 FROM family_cover other
+        WHERE other.token <> fc.token
+          AND fc.token = ANY(other.covers)
+          AND (other.n > fc.n OR (other.n = fc.n AND other.token < fc.token))
+    )
+)
+"""
+
+# Полный пролог для запросов поиска: определение семейств + раскрытие запроса.
+_FAMILY_CTE = "WITH " + _FAMILY_DEF + """, asked AS MATERIALIZED (
     SELECT array_agg(DISTINCT x) AS models FROM (
         SELECT unnest(%(models)s::text[]) AS x
         UNION
