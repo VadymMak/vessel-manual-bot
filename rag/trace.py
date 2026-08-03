@@ -83,14 +83,15 @@ async def _stages(query: str) -> dict:
         async with conn.cursor() as cur:
             await cur.execute(
                 _DENSE_SQL,
-                (dense_list, None, None, None, None, dense_list, settings.dense_top_k),
+                {"dense": dense_list, "models": None,
+                 "cm": None, "limit": settings.dense_top_k},
             )
             dense = [(r[0], float(r[1])) for r in await cur.fetchall()]
 
             await cur.execute(
                 _SPARSE_SQL,
-                (sparse_literal, None, None, None, None,
-                 sparse_literal, settings.sparse_top_k),
+                {"sparse": sparse_literal, "models": None,
+                 "cm": None, "limit": settings.sparse_top_k},
             )
             sparse = [(r[0], float(r[1])) for r in await cur.fetchall()]
 

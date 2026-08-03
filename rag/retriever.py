@@ -18,6 +18,61 @@ from .embedder import Embedder, MAX_LEN_QUERY, sparse_to_pgvector_literal
 log = logging.getLogger(__name__)
 _embedder = Embedder()
 
+# РАСКРЫТИЕ СЕМЕЙСТВ МОДЕЛЕЙ.
+#
+# Caterpillar печатает «3500B» как имя СЕМЕЙСТВА, а не модели. Титул
+# SEBU7844-37 несёт заголовок «3500B and 3500C Marine Engines», а ниже — строки
+# «S2D 1-UP (3508B) … S2J 1-UP (3512B) … S2S 1-UP (3516B)», из которых и собран
+# d.applicable_models. Чанк с разметкой {3500B} применим ко всем B-двигателям
+# документа, но фильтр сравнивал строки как непрозрачные токены и родства
+# не видел: Air Shutoff ADEM II (стр. 68–69) был недостижим ни для одного
+# запроса по конкретной модели.
+#
+# ТАБЛИЦА СЕМЕЙСТВ НЕ ЗАДАНА КОНСТАНТОЙ — она выводится из корпуса:
+#   семейный токен = токен в разметке чанка, которого НЕТ в списке моделей
+#                    своего документа (3500B среди S2J-моделей нет, 3512B есть);
+#   покрытие       = модели того же документа с тем же поколением, где
+#                    поколение — хвост после ведущих цифр (3500B → «B»).
+# На корпусе из двух мануалов это даёт ровно две строки, обе совпадают
+# с титульной страницей и ничего лишнего не приносят:
+#   3500B → 3508B, 3512B, 3516B
+#   3500C → 3508C, 3512C, 3516C
+# C18 семейством не становится: он присутствует в списке моделей своего
+# документа. Новый мануал даёт свои строки без правки кода — см.
+# scripts/family_table.py.
+#
+# НАПРАВЛЕНИЕ РАСКРЫТИЯ ОДНО: модель → семейства, её содержащие. Запрос 3512B
+# расширяется до {3512B, 3500B}. Обратное направление — запрос по семейству,
+# подхватывающий чанки конкретных моделей, — СОЗНАТЕЛЬНО НЕ РЕАЛИЗОВАНО:
+# это другая операция с другой ценой ошибки, и решать её надо отдельно.
+#
+# ПОКОЛЕНИЕ ОБЯЗАНО СОВПАДАТЬ. {3500C} под запросом 3512B не проходит:
+# Fluid Recommendations стр. 56–63 размечен {3500C} и B-двигателю не применим.
+# Цена ошибки здесь та же, что у ADEM II против ADEM III.
+_FAMILY_CTE = """
+WITH fam AS (
+    SELECT DISTINCT unnest(c.applicable_models) AS token, c.doc_id
+    FROM chunks c
+), families AS (
+    SELECT f.token, f.doc_id
+    FROM fam f
+    JOIN documents d ON d.id = f.doc_id
+    WHERE NOT (f.token = ANY(d.applicable_models))
+), asked AS MATERIALIZED (
+    SELECT array_agg(DISTINCT x) AS models FROM (
+        SELECT unnest(%(models)s::text[]) AS x
+        UNION
+        SELECT fa.token
+        FROM families fa
+        JOIN documents d ON d.id = fa.doc_id
+        CROSS JOIN LATERAL unnest(d.applicable_models) AS m
+        WHERE m = ANY(%(models)s::text[])
+          AND regexp_replace(m,  '^[0-9]+', '')
+            = regexp_replace(fa.token, '^[0-9]+', '')
+    ) s
+)
+"""
+
 # ФИЛЬТР ПО МОДЕЛИ ДВИГАТЕЛЯ (правило 7 CLAUDE.md: в SQL WHERE, не в промпте).
 #
 # Применимость берётся с приоритетом: собственная разметка чанка, если она есть,
@@ -25,44 +80,54 @@ _embedder = Embedder()
 # «Применимо к:» в rag/generator.py — они обязаны совпадать, иначе ответ будет
 # заявлять применимость, по которой его же и не нашли бы.
 #
-# Фильтровать ПО ЧАНКУ ОДНОМУ НЕЛЬЗЯ: собственную разметку несут 13 чанков
-# из 161, у остальных массив пуст, и `applicable_models && ARRAY['3512B']`
-# отсеял бы 92% базы вместе с правильными ответами. Пустой массив означает
-# «применимо ко всему семейству документа», а не «не применимо ни к чему».
+# Три случая, и третий забывали дважды:
+#   разметка содержит запрошенную модель            → пройти
+#   разметка содержит семейство, её включающее      → пройти (через `asked`)
+#   разметка ПУСТА, применимость от документа       → пройти, если модель есть
+#                                                     у документа
+#   разметка содержит чужие модели или поколения    → отсечь
+#
+# Фильтровать ПО ЧАНКУ ОДНОМУ НЕЛЬЗЯ: собственную разметку несут 12 чанков
+# из 394, у остальных массив пуст, и `applicable_models && ARRAY['3512B']`
+# отсеял бы 97% базы вместе с правильными ответами. Пустой массив означает
+# «применимо ко всему семейству документа», а не «не применимо ни к чему»,
+# и ветка ELSE ниже обрабатывает это ЯВНО, а не по совпадению.
 #
 # И это НЕ фильтр по документу: чанк C18 с собственной разметкой пройдёт
 # фильтр 3512B, если 3512B у него указан, а чанк SEBU7844 с разметкой
 # {3500C} под 3512B не пройдёт, хотя документ подходит.
 _MODEL_FILTER = """
-    (%s::text[] IS NULL OR
+    (%(models)s::text[] IS NULL OR
      (CASE WHEN cardinality(c.applicable_models) > 0
            THEN c.applicable_models
-           ELSE d.applicable_models END) && %s::text[])
+           ELSE d.applicable_models END) && (SELECT models FROM asked))
 """
 
-# %s-параметры: dense_vec, models_arr, models_arr, control_module, control_module, dense_vec, limit
+# Параметры именованные: dense, models, cm, limit
 _DENSE_SQL = f"""
-SELECT c.id, 1 - (c.embedding_dense <=> %s::vector) AS score
+{_FAMILY_CTE}
+SELECT c.id, 1 - (c.embedding_dense <=> %(dense)s::vector) AS score
 FROM chunks c
 JOIN documents d ON d.id = c.doc_id
 WHERE
 {_MODEL_FILTER}
-    AND (%s::text IS NULL OR c.control_module = %s)
-ORDER BY c.embedding_dense <=> %s::vector
-LIMIT %s
+    AND (%(cm)s::text IS NULL OR c.control_module = %(cm)s)
+ORDER BY c.embedding_dense <=> %(dense)s::vector
+LIMIT %(limit)s
 """
 
-# %s-параметры: sparse_literal, models_arr, models_arr, control_module, control_module, sparse_literal, limit
+# Параметры именованные: sparse, models, cm, limit
 # <#> возвращает −dot_product → ORDER BY <#> = убывание сходства
 _SPARSE_SQL = f"""
-SELECT c.id, -(c.embedding_sparse <#> %s::sparsevec) AS score
+{_FAMILY_CTE}
+SELECT c.id, -(c.embedding_sparse <#> %(sparse)s::sparsevec) AS score
 FROM chunks c
 JOIN documents d ON d.id = c.doc_id
 WHERE
 {_MODEL_FILTER}
-    AND (%s::text IS NULL OR c.control_module = %s)
-ORDER BY c.embedding_sparse <#> %s::sparsevec
-LIMIT %s
+    AND (%(cm)s::text IS NULL OR c.control_module = %(cm)s)
+ORDER BY c.embedding_sparse <#> %(sparse)s::sparsevec
+LIMIT %(limit)s
 """
 
 # JOIN к documents добавлен ради applicability документа: строка «Применимо к:»
@@ -155,18 +220,16 @@ async def retrieve(
             # Dense ANN
             await cur.execute(
                 _DENSE_SQL,
-                (dense_list, models, models,
-                 control_module, control_module,
-                 dense_list, settings.dense_top_k),
+                {"dense": dense_list, "models": models,
+                 "cm": control_module, "limit": settings.dense_top_k},
             )
             dense_ids = [r[0] for r in await cur.fetchall()]
 
             # Sparse (sequential scan — достаточно при <10k чанков)
             await cur.execute(
                 _SPARSE_SQL,
-                (sparse_literal, models, models,
-                 control_module, control_module,
-                 sparse_literal, settings.sparse_top_k),
+                {"sparse": sparse_literal, "models": models,
+                 "cm": control_module, "limit": settings.sparse_top_k},
             )
             sparse_ids = [r[0] for r in await cur.fetchall()]
 

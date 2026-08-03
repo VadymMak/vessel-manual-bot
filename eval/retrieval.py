@@ -108,12 +108,14 @@ async def _branch_ranks(query: str, models: list[str] | None, targets: set[int])
         async with conn.cursor() as cur:
             await cur.execute(
                 _DENSE_SQL,
-                (dense_vec, models, models, None, None, dense_vec, settings.dense_top_k),
+                {"dense": dense_vec, "models": models,
+                 "cm": None, "limit": settings.dense_top_k},
             )
             dense = [r[0] for r in await cur.fetchall()]
             await cur.execute(
                 _SPARSE_SQL,
-                (sparse_lit, models, models, None, None, sparse_lit, settings.sparse_top_k),
+                {"sparse": sparse_lit, "models": models,
+                 "cm": None, "limit": settings.sparse_top_k},
             )
             sparse = [r[0] for r in await cur.fetchall()]
 
