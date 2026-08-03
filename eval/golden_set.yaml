@@ -445,21 +445,62 @@
 
 - id: gs028
   question: "Каков зазор клапана (valve lash) на 3512C?"
-  category: honest_refusal
+  category: number_accuracy
   expected_contains:
-    - "Service Manual"
+    - "0.50 mm"
+    - "1.00 mm"
+    - ["Inlet", "впуск"]
+    - ["Exhaust", "выпуск"]
   must_not_contain: []
-  expected_pages: []
-  notes: "Чанк 113: зазор клапана не в O&M. 'For the valve lash setting, see the engine Specifications manual.' Модель ОБЯЗАНА отказать."
+  expected_pages: [49, 53]
+  target_chunk:
+    doc: RENR5078-05.pdf
+    heading_startswith: "Valve Lash and Valve Bridge"
+    content_contains: "0.50 mm (0.020 inch)"
+  notes: |
+    ПЕРЕЕХАЛ ИЗ honest_refusal 2026-08-03, вместе с индексацией RENR5078-05.
+    Раньше ответа в корпусе не было и отказ был правильным. Теперь есть:
+    Table 10, стр. 51, «Valve Lash Setting: Engine Stopped» — Inlet
+    0.50 mm (0.020 inch), Exhaust 1.00 mm (0.040 inch).
+
+    ОЖИДАНИЕ НА МЕТРИКЕ, НЕ НА ДЮЙМАХ. В RENR5078-05 выпускной записан как
+    0.040 inch, в RENR5077-10 — как 0.039 inch; метрическое 1.00 mm в обоих
+    одинаково. Требовать конкретный дюймовый рендеринг нельзя, их в корпусе
+    будет два, и вопрос стал бы проверять, из какого документа пришёл ответ,
+    а не верность числа.
+
+    Требуются ОБА значения и различение клапанов: один зазор на оба клапана —
+    это неверный ответ, а не неполный.
 
 - id: gs029
   question: "Как отрегулировать valve bridge на 3508B?"
-  category: honest_refusal
+  category: procedure_detail
   expected_contains:
-    - "Service Manual"
+    - "0.038 mm"
+    - ["adjustable", "регулируем"]
   must_not_contain: []
-  expected_pages: []
-  notes: "Чанк 113: 'Refer to the Systems Operation/Testing and Adjusting Manual, Valve Lash and Valve Bridge Adjustment article'. Нет конкретных значений в O&M."
+  expected_pages: [49, 51]
+  target_chunk:
+    doc: RENR5078-05.pdf
+    heading_startswith: "Valve Lash and Valve Bridge"
+    content_contains: "0.038 mm (0.0015 inch)"
+  notes: |
+    ПЕРЕЕХАЛ ИЗ honest_refusal 2026-08-03. Процедура в RENR5078-05,
+    стр. 50–51, шаги 1–6: натяг по индикатору 0.038 mm (0.0015 inch),
+    контргайка 30 ± 4 N·m (22 ± 3 lb ft).
+
+    ОЖИДАНИЕ ВКЛЮЧАЕТ РАЗВИЛКУ, А НЕ ТОЛЬКО ЧИСЛО. Стр. 49: «There are two
+    different design of valve bridges that are used. If the engine is
+    equipped with an adjustable valve bridge … proceed to the Valve Bridge
+    Adjustment. If the engine is equipped with a nonadjustable valve bridge
+    … proceed to the Valve Lash Adjustment.»
+
+    Механику с НЕрегулируемыми мостиками нельзя выдать инструкцию крутить
+    винт, которого у него нет. Ответ, называющий только 0.038 mm, формально
+    точен и практически опасен — поэтому требуется упоминание исполнения.
+
+    Развилка и шаги лежат в РАЗНЫХ частях одной процедуры (часть 1/3 и 2/3),
+    поэтому вопрос заодно проверяет, доходят ли до генератора обе.
 
 - id: gs030
   question: "Какое давление открытия форсунки на 3516C?"
@@ -469,6 +510,57 @@
   must_not_contain: []
   expected_pages: []
   notes: "Этой информации нет ни в одном чанке. Абсолютный отказ."
+
+# ─── 8а. Новые честные отказы, взамен переехавших gs028 и gs029 ──────────────
+#
+# Написаны 2026-08-03 при индексации RENR5078-05. Категория была бы усохла
+# с четырёх вопросов до двух ровно тогда, когда корпус вырос, — то есть
+# защита ослабла бы именно в тот момент, когда нужнее всего.
+#
+# ТЕРРИТОРИЯ ВЫБРАНА ТАК, ЧТОБЫ ОНА НЕ ЗАКРЫЛАСЬ СЛЕДУЮЩИМ ДОКУМЕНТОМ.
+# Всё перечисленное живёт в Disassembly and Assembly и Specifications,
+# которых у нас нет вовсе. Проверено grep-ом по тексту ВСЕХ ТРЁХ документов
+# корпуса: ноль упоминаний в каждом.
+#
+# Вопросы написаны ДО прогона, система на них не запускалась.
+
+- id: gs043
+  question: "Какой момент затяжки болтов головки блока цилиндров на 3512B?"
+  category: honest_refusal
+  expected_contains:
+    - ["Disassembly and Assembly", "Specifications", "Service Manual", "дилер"]
+  must_not_contain: []
+  expected_pages: []
+  notes: |
+    Ноль упоминаний cylinder head bolt / head bolt torque в RENR5078-05,
+    SEBU7844-37 и C18-MarineGenSet. Момент затяжки болтов головки — это
+    Disassembly and Assembly, и он не появится ни в O&M, ни в Testing
+    and Adjusting.
+
+- id: gs044
+  question: "Каков зазор поршневых колец в замке на 3516C?"
+  category: honest_refusal
+  expected_contains:
+    - ["Disassembly and Assembly", "Specifications", "Service Manual", "дилер"]
+  must_not_contain: []
+  expected_pages: []
+  notes: |
+    Ноль упоминаний piston ring gap / ring end gap во всех трёх документах.
+    Это Specifications. Вопрос выбран ещё и потому, что рядом с ним в корпусе
+    много других зазоров с числами — соблазн подставить чужое число есть.
+
+- id: gs045
+  question: "С каким моментом затягивать шатунные болты на 3508B?"
+  category: honest_refusal
+  expected_contains:
+    - ["Disassembly and Assembly", "Specifications", "Service Manual", "дилер"]
+  must_not_contain: []
+  expected_pages: []
+  notes: |
+    Ноль упоминаний connecting rod bolt во всех трёх документах.
+    Рядом в корпусе есть моменты затяжки с числами — 30 ± 4 N·m для
+    контргайки мостика, 70 ± 15 N·m для винта коромысла. Вопрос проверяет,
+    не подставит ли модель ближайший момент затяжки вместо отказа.
 
 # ─── 9. Смешанные / интеграционные ───────────────────────────────────────────
 
