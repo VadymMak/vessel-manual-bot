@@ -115,14 +115,27 @@ VARIANTS: list[tuple[str, object, bool]] = [
 
 
 def fuse_rank(arm: dict, targets: list[int], fn, drop_zero=False) -> int | None:
-    """Ранг лучшей цели в слитом списке. None — цели нет ни в одном окне."""
+    """
+    Ранг лучшей цели в слитом списке. None — цели нет ни в одном окне.
+
+    ТАЙ-БРЕЙК ВОСПРОИЗВОДИТ ЖИВОЙ rag.retriever._rrf, а не изобретает свой.
+    Там словарь наполняется сначала dense-списком, потом sparse, а sorted()
+    в Python устойчива — значит при равных скорах впереди оказывается тот,
+    кто пришёл из dense. Это не украшение: при вменении отсутствия кандидат
+    с dense-рангом 1 получает РОВНО тот же скор, что кандидат со sparse-рангом
+    1 (1/61 + 1/111 в обе стороны), и порядок между ними решает только
+    тай-брейк. Ранняя версия этой оснастки рвала равенства по возрастанию id
+    и из-за этого предсказывала MRR 0.707 там, где живой конвейер даёт 0.719.
+    """
     dr = _ranks(arm["dense"])
     sr = (_ranks_nonzero(arm["sparse"], arm["sparse_scores"])
           if drop_zero and "sparse_scores" in arm else _ranks(arm["sparse"]))
-    ids = set(dr) | set(sr)
-    if not ids:
+    if not dr and not sr:
         return None
-    scored = sorted(ids, key=lambda c: (-fn(dr.get(c), sr.get(c)), c))
+    # Порядок вставки: сначала dense по своему рангу, потом sparse-only.
+    order = {c: i for i, c in enumerate(
+        sorted(dr, key=dr.get) + sorted((c for c in sr if c not in dr), key=sr.get))}
+    scored = sorted(order, key=lambda c: (-fn(dr.get(c), sr.get(c)), order[c]))
     hits = [i + 1 for i, c in enumerate(scored) if c in targets]
     return min(hits) if hits else None
 
