@@ -9,20 +9,31 @@
 вообще: эмбеддинг запроса, Neon, реранкер. Одного прогона достаточно,
 и результат точный.
 
-ГРАНИЦА ДЕТЕРМИНИЗМА, найдена 2026-08-03. «Одного прогона достаточно»
-верно НЕ ДЛЯ ВСЕХ вопросов. На кириллическом запросе без латинского якоря
-sparse-ветвь даёт скор ровно ноль почти всему окну — у шести вопросов
-категории ru_no_anchor ненулевых ровно 0 из 50, — а порядок среди нулей
-Postgres выбирает произвольно. Два прогона gs035 из разных соединений
-дали sparse-окна с пересечением 0 из 50.
+ДЕТЕРМИНИЗМ БЫЛ СЛОМАН И ПОЧИНЕН 2026-08-03. Историю стоит помнить,
+потому что она про метод, а не про формулу.
 
-Практически: колонки sparse и RRF для вопросов БЕЗ якоря показывают один
-жребий, а не измерение, и повторный прогон даст другие числа. Колонки
-dense и ранг после реранкинга устойчивы: dense-скоры ненулевые, порядок
-в них определён. Для якорных вопросов устойчиво всё.
+Было: на кириллическом запросе sparse-ветвь давала скор ровно ноль почти
+всему окну (у шести вопросов ru_no_anchor — ровно 0 ненулевых из 50),
+а порядок среди нулей Postgres выбирал произвольно. Два прогона gs035
+из разных соединений дали sparse-окна с пересечением 0 из 50. Колонки
+sparse и RRF у таких вопросов показывали жребий, а не измерение.
 
-Разбор, замер вариантов слияния и что с этим делать — docs/BACKLOG.md,
-пункт 6.
+Проверка «поиск детерминирован» до этого проводилась на gs007 — вопросе
+С ЛАТИНСКИМ ЯКОРЕМ. Проверка была верной, вывод из неё распространили
+на всю совокупность, а совокупность состоит из двух разных популяций.
+Впредь: проверять на представителе КАЖДОЙ популяции, а не на первом
+попавшемся экземпляре.
+
+Стало: `AND score > 0` в _SPARSE_SQL убрал нули из окна, и порядок стал
+определён. Проверено тремя прогонами gs035 (два в одном процессе, один
+в новом): списки dense, sparse и RRF совпали посимвольно. То же на gs033
+и на якорном gs004.
+
+Колонка «sp≠0» показывает длину sparse-окна. Ноль означает, что
+лексическая ветвь по этому запросу не сказала ничего и всё держится
+на dense. Режим отказа виден из таблицы, а не ищется раскопками.
+
+Разбор и замер вариантов слияния — docs/BACKLOG.md, пункт 6.
 
 Целевой чанк задаётся ПРЕДИКАТОМ ПО СОДЕРЖИМОМУ (поле target_chunk
 в golden_set.yaml), а не id: id меняются при переиндексации.
@@ -68,6 +79,9 @@ class Row:
     target_ids: list[int] = field(default_factory=list)
     dense: int | None = None
     sparse: int | None = None
+    # Сколько чанков вообще попало в sparse-окно. Ноль означает, что
+    # лексическая ветвь по этому запросу не сказала ничего.
+    sparse_hits: int = 0
     rrf: int | None = None
     rerank: int | None = None
     target_logit: float | None = None
@@ -140,7 +154,12 @@ async def _branch_ranks(query: str, models: list[str] | None, targets: set[int])
         hits = [i + 1 for i, cid in enumerate(lst) if cid in targets]
         return min(hits) if hits else None
 
-    return best(dense), best(sparse), best(fused)
+    # Длина sparse-окна ЕСТЬ метрика, а не служебное число: после того как
+    # из запроса ушли нулевые скоры, окно короче пятидесяти означает ровно
+    # одно — лексического пересечения запроса с корпусом почти нет, и вся
+    # тяжесть легла на dense. Вырождение ветви должно быть видно из таблицы,
+    # а не находиться раскопками, как 2026-08-03.
+    return best(dense), best(sparse), best(fused), len(sparse)
 
 
 async def _run_one(item: dict, models: list[str] | None) -> Row:
@@ -157,7 +176,7 @@ async def _run_one(item: dict, models: list[str] | None) -> Row:
             return row
         targets = set(row.target_ids)
 
-        row.dense, row.sparse, row.rrf = await _branch_ranks(
+        row.dense, row.sparse, row.rrf, row.sparse_hits = await _branch_ranks(
             item["question"], models, targets
         )
 
@@ -237,7 +256,7 @@ def _print(rows: list[Row], gaps: dict[str, tuple], verbose: bool) -> None:
     click.echo("РЕТРИВАЛЬНАЯ ОЦЕНКА — детерминированная, без генерации")
     click.echo("=" * 108)
     click.echo(
-        f"{'id':<8}{'категория':<18}{'dense':>7}{'sparse':>7}{'RRF':>6}"
+        f"{'id':<8}{'категория':<18}{'dense':>7}{'sparse':>7}{'sp≠0':>6}{'RRF':>6}"
         f"{'ранк':>6}{'логит цели':>12}{'логит #1':>11}{'разрыв':>9}  цель"
     )
     for r in rows:
@@ -249,7 +268,8 @@ def _print(rows: list[Row], gaps: dict[str, tuple], verbose: bool) -> None:
         gap_s = "—" if gap is None else f"{gap:+.3f}"
         color = None if r.rerank == 1 else ("yellow" if (r.rerank or 99) <= n else "red")
         click.secho(
-            f"{r.id:<8}{r.category:<18}{f(r.dense):>7}{f(r.sparse):>7}{f(r.rrf):>6}"
+            f"{r.id:<8}{r.category:<18}{f(r.dense):>7}{f(r.sparse):>7}"
+            f"{r.sparse_hits:>6}{f(r.rrf):>6}"
             f"{f(r.rerank):>6}"
             f"{'—' if r.target_logit is None else f'{r.target_logit:+.3f}':>12}"
             f"{'—' if r.top1_logit is None else f'{r.top1_logit:+.3f}':>11}"
